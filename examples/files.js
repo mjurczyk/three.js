@@ -1,4 +1,7 @@
 var files = {
+	"experimental": [
+		"exp_exp_localfilestorage"
+	],
 	"webgl": [
 		"webgl_animation_cloth",
 		"webgl_animation_keyframes",

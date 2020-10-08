@@ -11,31 +11,29 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 	constructor: ImageLoader,
 
-	load: function ( url, onLoad, onProgress, onError ) {
+	toBase64: function ( image ) {
 
-		if ( this.path !== undefined ) url = this.path + url;
+		if ( typeof document === 'undefined' ) {
 
-		url = this.manager.resolveURL( url );
-
-		const scope = this;
-
-		const cached = Cache.get( url );
-
-		if ( cached !== undefined ) {
-
-			scope.manager.itemStart( url );
-
-			setTimeout( function () {
-
-				if ( onLoad ) onLoad( cached );
-
-				scope.manager.itemEnd( url );
-
-			}, 0 );
-
-			return cached;
+			return;
 
 		}
+
+		const canvas = document.createElement( 'canvas' );
+		const context = canvas.getContext( '2d' );
+
+		canvas.width = image.naturalWidth || image.width || 'auto';
+		canvas.height = image.naturalHeight || image.height || 'auto';
+
+		context.drawImage( image, 0, 0 );
+
+		return canvas.toDataURL();
+
+	},
+
+	toImage: function ( src, onLoad, onProgress, onError, cache ) {
+
+		const scope = this;
 
 		const image = document.createElementNS( 'http://www.w3.org/1999/xhtml', 'img' );
 
@@ -44,11 +42,21 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 			image.removeEventListener( 'load', onImageLoad, false );
 			image.removeEventListener( 'error', onImageError, false );
 
-			Cache.add( url, this );
+			if ( cache ) {
+
+				const base64 = scope.toBase64( this );
+
+				if ( base64 ) {
+
+					Cache.add( src, base64 );
+
+				}
+
+			}
 
 			if ( onLoad ) onLoad( this );
 
-			scope.manager.itemEnd( url );
+			scope.manager.itemEnd( src );
 
 		}
 
@@ -59,25 +67,49 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			if ( onError ) onError( event );
 
-			scope.manager.itemError( url );
-			scope.manager.itemEnd( url );
+			scope.manager.itemError( src );
+			scope.manager.itemEnd( src );
 
 		}
 
 		image.addEventListener( 'load', onImageLoad, false );
 		image.addEventListener( 'error', onImageError, false );
 
-		if ( url.substr( 0, 5 ) !== 'data:' ) {
+		if ( src.substr( 0, 5 ) !== 'data:' ) {
 
 			if ( this.crossOrigin !== undefined ) image.crossOrigin = this.crossOrigin;
 
 		}
 
-		scope.manager.itemStart( url );
+		scope.manager.itemStart( src );
 
-		image.src = url;
+		image.src = src;
 
 		return image;
+
+	},
+
+	load: function ( url, onLoad, onProgress, onError ) {
+
+		if ( this.path !== undefined ) url = this.path + url;
+
+		url = this.manager.resolveURL( url );
+
+		const scope = this;
+
+		Cache.get( url, ( cached ) => {
+
+			if ( cached !== undefined ) {
+
+				scope.manager.itemStart( url );
+
+				return scope.toImage( cached, onLoad, onProgress, onError, false );
+
+			}
+
+			return scope.toImage( url, onLoad, onProgress, onError, true );
+
+		} );
 
 	}
 

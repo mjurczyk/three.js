@@ -26433,21 +26433,100 @@
 	var Cache = {
 		enabled: false,
 		files: {},
-		add: function add(key, file) {
-			if (this.enabled === false) return; // console.log( 'THREE.Cache', 'Adding key:', key );
+		addFn: null,
+		getFn: null,
+		removeFn: null,
+		useCache: function useCache(_temp) {
+			var _ref = _temp === void 0 ? {} : _temp,
+					add = _ref.add,
+					get = _ref.get,
+					remove = _ref.remove,
+					clear = _ref.clear;
 
-			this.files[key] = file;
+			if (typeof add === 'function') this.addFn = add.bind(this);
+			if (typeof get === 'function') this.getFn = get.bind(this);
+			if (typeof remove === 'function') this.removeFn = remove.bind(this);
+			if (typeof clear === 'function') this.clearFn = clear.bind(this);
 		},
-		get: function get(key) {
-			if (this.enabled === false) return; // console.log( 'THREE.Cache', 'Checking key:', key );
+		add: function add(key, file, callback) {
+			if (callback === void 0) {
+				callback = function callback() {};
+			}
 
-			return this.files[key];
+			if (this.enabled === false) {
+				callback(undefined);
+				return;
+			}
+
+			var isBlob = key.match(/^blob:.+/);
+
+			if (isBlob) {
+				callback(undefined);
+				return;
+			}
+
+			console.log('THREE.Cache', 'Adding key:', key);
+
+			if (this.addFn) {
+				this.addFn(key, file, callback);
+			} else {
+				this.files[key] = file;
+				callback();
+			}
 		},
-		remove: function remove(key) {
-			delete this.files[key];
+		get: function get(key, callback) {
+			if (callback === void 0) {
+				callback = function callback() {};
+			}
+
+			if (this.enabled === false) {
+				callback(undefined);
+				return;
+			}
+
+			var isBlob = key.match(/^blob:.+/);
+
+			if (isBlob) {
+				callback(undefined);
+				return;
+			}
+
+			console.log('THREE.Cache', 'Checking key:', key);
+
+			if (this.getFn) {
+				return this.getFn(key, callback);
+			} else {
+				callback(this.files[key]);
+				return this.files[key];
+			}
 		},
-		clear: function clear() {
-			this.files = {};
+		remove: function remove(key, callback) {
+			if (callback === void 0) {
+				callback = function callback() {};
+			}
+
+			console.log('THREE.Cache', 'Removing key:', key);
+
+			if (this.removeFn) {
+				this.removeFn(key, callback);
+			} else {
+				delete this.files[key];
+				callback();
+			}
+		},
+		clear: function clear(callback) {
+			if (callback === void 0) {
+				callback = function callback() {};
+			}
+
+			console.log('THREE.Cache', 'Clearing');
+
+			if (this.clearFn) {
+				this.clearFn(callback);
+			} else {
+				this.files = {};
+				callback();
+			}
 		}
 	};
 
@@ -26601,174 +26680,174 @@
 			if (this.path !== undefined) url = this.path + url;
 			url = this.manager.resolveURL(url);
 			var scope = this;
-			var cached = Cache.get(url);
+			Cache.get(url, function (cached) {
+				if (cached !== undefined) {
+					scope.manager.itemStart(url);
+					setTimeout(function () {
+						if (onLoad) onLoad(cached);
+						scope.manager.itemEnd(url);
+					}, 0);
+					return cached;
+				} // Check if request is duplicate
 
-			if (cached !== undefined) {
+
+				if (loading[url] !== undefined) {
+					loading[url].push({
+						onLoad: onLoad,
+						onProgress: onProgress,
+						onError: onError
+					});
+					return;
+				} // Check for data: URI
+
+
+				var dataUriRegex = /^data:(.*?)(;base64)?,(.*)$/;
+				var dataUriRegexResult = url.match(dataUriRegex);
+				var request; // Safari can not handle Data URIs through XMLHttpRequest so process manually
+
+				if (dataUriRegexResult) {
+					var mimeType = dataUriRegexResult[1];
+					var isBase64 = !!dataUriRegexResult[2];
+					var data = dataUriRegexResult[3];
+					data = decodeURIComponent(data);
+					if (isBase64) data = atob(data);
+
+					try {
+						var response;
+						var responseType = (scope.responseType || '').toLowerCase();
+
+						switch (responseType) {
+							case 'arraybuffer':
+							case 'blob':
+								var view = new Uint8Array(data.length);
+
+								for (var i = 0; i < data.length; i++) {
+									view[i] = data.charCodeAt(i);
+								}
+
+								if (responseType === 'blob') {
+									response = new Blob([view.buffer], {
+										type: mimeType
+									});
+								} else {
+									response = view.buffer;
+								}
+
+								break;
+
+							case 'document':
+								var parser = new DOMParser();
+								response = parser.parseFromString(data, mimeType);
+								break;
+
+							case 'json':
+								response = JSON.parse(data);
+								break;
+
+							default:
+								// 'text' or other
+								response = data;
+								break;
+						} // Wait for next browser tick like standard XMLHttpRequest event dispatching does
+
+
+						setTimeout(function () {
+							if (onLoad) onLoad(response);
+							scope.manager.itemEnd(url);
+						}, 0);
+					} catch (error) {
+						// Wait for next browser tick like standard XMLHttpRequest event dispatching does
+						setTimeout(function () {
+							if (onError) onError(error);
+							scope.manager.itemError(url);
+							scope.manager.itemEnd(url);
+						}, 0);
+					}
+				} else {
+					// Initialise array for duplicate requests
+					loading[url] = [];
+					loading[url].push({
+						onLoad: onLoad,
+						onProgress: onProgress,
+						onError: onError
+					});
+					request = new XMLHttpRequest();
+					request.open('GET', url, true);
+					request.addEventListener('load', function (event) {
+						var response = this.response;
+						var callbacks = loading[url];
+						delete loading[url];
+
+						if (this.status === 200 || this.status === 0) {
+							// Some browsers return HTTP Status 0 when using non-http protocol
+							// e.g. 'file://' or 'data://'. Handle as success.
+							if (this.status === 0) console.warn('THREE.FileLoader: HTTP Status 0 received.'); // Add to cache only on HTTP success, so that we do not cache
+							// error response bodies as proper responses to requests.
+
+							Cache.add(url, response);
+
+							for (var _i = 0, il = callbacks.length; _i < il; _i++) {
+								var callback = callbacks[_i];
+								if (callback.onLoad) callback.onLoad(response);
+							}
+
+							scope.manager.itemEnd(url);
+						} else {
+							for (var _i2 = 0, _il = callbacks.length; _i2 < _il; _i2++) {
+								var _callback = callbacks[_i2];
+								if (_callback.onError) _callback.onError(event);
+							}
+
+							scope.manager.itemError(url);
+							scope.manager.itemEnd(url);
+						}
+					}, false);
+					request.addEventListener('progress', function (event) {
+						var callbacks = loading[url];
+
+						for (var _i3 = 0, il = callbacks.length; _i3 < il; _i3++) {
+							var callback = callbacks[_i3];
+							if (callback.onProgress) callback.onProgress(event);
+						}
+					}, false);
+					request.addEventListener('error', function (event) {
+						var callbacks = loading[url];
+						delete loading[url];
+
+						for (var _i4 = 0, il = callbacks.length; _i4 < il; _i4++) {
+							var callback = callbacks[_i4];
+							if (callback.onError) callback.onError(event);
+						}
+
+						scope.manager.itemError(url);
+						scope.manager.itemEnd(url);
+					}, false);
+					request.addEventListener('abort', function (event) {
+						var callbacks = loading[url];
+						delete loading[url];
+
+						for (var _i5 = 0, il = callbacks.length; _i5 < il; _i5++) {
+							var callback = callbacks[_i5];
+							if (callback.onError) callback.onError(event);
+						}
+
+						scope.manager.itemError(url);
+						scope.manager.itemEnd(url);
+					}, false);
+					if (scope.responseType !== undefined) request.responseType = scope.responseType;
+					if (scope.withCredentials !== undefined) request.withCredentials = scope.withCredentials;
+					if (request.overrideMimeType) request.overrideMimeType(scope.mimeType !== undefined ? scope.mimeType : 'text/plain');
+
+					for (var header in scope.requestHeader) {
+						request.setRequestHeader(header, scope.requestHeader[header]);
+					}
+
+					request.send(null);
+				}
+
 				scope.manager.itemStart(url);
-				setTimeout(function () {
-					if (onLoad) onLoad(cached);
-					scope.manager.itemEnd(url);
-				}, 0);
-				return cached;
-			} // Check if request is duplicate
-
-
-			if (loading[url] !== undefined) {
-				loading[url].push({
-					onLoad: onLoad,
-					onProgress: onProgress,
-					onError: onError
-				});
-				return;
-			} // Check for data: URI
-
-
-			var dataUriRegex = /^data:(.*?)(;base64)?,(.*)$/;
-			var dataUriRegexResult = url.match(dataUriRegex);
-			var request; // Safari can not handle Data URIs through XMLHttpRequest so process manually
-
-			if (dataUriRegexResult) {
-				var mimeType = dataUriRegexResult[1];
-				var isBase64 = !!dataUriRegexResult[2];
-				var data = dataUriRegexResult[3];
-				data = decodeURIComponent(data);
-				if (isBase64) data = atob(data);
-
-				try {
-					var response;
-					var responseType = (this.responseType || '').toLowerCase();
-
-					switch (responseType) {
-						case 'arraybuffer':
-						case 'blob':
-							var view = new Uint8Array(data.length);
-
-							for (var i = 0; i < data.length; i++) {
-								view[i] = data.charCodeAt(i);
-							}
-
-							if (responseType === 'blob') {
-								response = new Blob([view.buffer], {
-									type: mimeType
-								});
-							} else {
-								response = view.buffer;
-							}
-
-							break;
-
-						case 'document':
-							var parser = new DOMParser();
-							response = parser.parseFromString(data, mimeType);
-							break;
-
-						case 'json':
-							response = JSON.parse(data);
-							break;
-
-						default:
-							// 'text' or other
-							response = data;
-							break;
-					} // Wait for next browser tick like standard XMLHttpRequest event dispatching does
-
-
-					setTimeout(function () {
-						if (onLoad) onLoad(response);
-						scope.manager.itemEnd(url);
-					}, 0);
-				} catch (error) {
-					// Wait for next browser tick like standard XMLHttpRequest event dispatching does
-					setTimeout(function () {
-						if (onError) onError(error);
-						scope.manager.itemError(url);
-						scope.manager.itemEnd(url);
-					}, 0);
-				}
-			} else {
-				// Initialise array for duplicate requests
-				loading[url] = [];
-				loading[url].push({
-					onLoad: onLoad,
-					onProgress: onProgress,
-					onError: onError
-				});
-				request = new XMLHttpRequest();
-				request.open('GET', url, true);
-				request.addEventListener('load', function (event) {
-					var response = this.response;
-					var callbacks = loading[url];
-					delete loading[url];
-
-					if (this.status === 200 || this.status === 0) {
-						// Some browsers return HTTP Status 0 when using non-http protocol
-						// e.g. 'file://' or 'data://'. Handle as success.
-						if (this.status === 0) console.warn('THREE.FileLoader: HTTP Status 0 received.'); // Add to cache only on HTTP success, so that we do not cache
-						// error response bodies as proper responses to requests.
-
-						Cache.add(url, response);
-
-						for (var _i = 0, il = callbacks.length; _i < il; _i++) {
-							var callback = callbacks[_i];
-							if (callback.onLoad) callback.onLoad(response);
-						}
-
-						scope.manager.itemEnd(url);
-					} else {
-						for (var _i2 = 0, _il = callbacks.length; _i2 < _il; _i2++) {
-							var _callback = callbacks[_i2];
-							if (_callback.onError) _callback.onError(event);
-						}
-
-						scope.manager.itemError(url);
-						scope.manager.itemEnd(url);
-					}
-				}, false);
-				request.addEventListener('progress', function (event) {
-					var callbacks = loading[url];
-
-					for (var _i3 = 0, il = callbacks.length; _i3 < il; _i3++) {
-						var callback = callbacks[_i3];
-						if (callback.onProgress) callback.onProgress(event);
-					}
-				}, false);
-				request.addEventListener('error', function (event) {
-					var callbacks = loading[url];
-					delete loading[url];
-
-					for (var _i4 = 0, il = callbacks.length; _i4 < il; _i4++) {
-						var callback = callbacks[_i4];
-						if (callback.onError) callback.onError(event);
-					}
-
-					scope.manager.itemError(url);
-					scope.manager.itemEnd(url);
-				}, false);
-				request.addEventListener('abort', function (event) {
-					var callbacks = loading[url];
-					delete loading[url];
-
-					for (var _i5 = 0, il = callbacks.length; _i5 < il; _i5++) {
-						var callback = callbacks[_i5];
-						if (callback.onError) callback.onError(event);
-					}
-
-					scope.manager.itemError(url);
-					scope.manager.itemEnd(url);
-				}, false);
-				if (this.responseType !== undefined) request.responseType = this.responseType;
-				if (this.withCredentials !== undefined) request.withCredentials = this.withCredentials;
-				if (request.overrideMimeType) request.overrideMimeType(this.mimeType !== undefined ? this.mimeType : 'text/plain');
-
-				for (var header in this.requestHeader) {
-					request.setRequestHeader(header, this.requestHeader[header]);
-				}
-
-				request.send(null);
-			}
-
-			scope.manager.itemStart(url);
-			return request;
+				return request;
+			});
 		},
 		setResponseType: function setResponseType(value) {
 			this.responseType = value;
@@ -26912,49 +26991,69 @@
 
 	ImageLoader.prototype = Object.assign(Object.create(Loader.prototype), {
 		constructor: ImageLoader,
-		load: function load(url, onLoad, onProgress, onError) {
-			if (this.path !== undefined) url = this.path + url;
-			url = this.manager.resolveURL(url);
-			var scope = this;
-			var cached = Cache.get(url);
-
-			if (cached !== undefined) {
-				scope.manager.itemStart(url);
-				setTimeout(function () {
-					if (onLoad) onLoad(cached);
-					scope.manager.itemEnd(url);
-				}, 0);
-				return cached;
+		toBase64: function toBase64(image) {
+			if (typeof document === 'undefined') {
+				return;
 			}
 
+			var canvas = document.createElement('canvas');
+			var context = canvas.getContext('2d');
+			canvas.width = image.naturalWidth || image.width || 'auto';
+			canvas.height = image.naturalHeight || image.height || 'auto';
+			context.drawImage(image, 0, 0);
+			return canvas.toDataURL();
+		},
+		toImage: function toImage(src, onLoad, onProgress, onError, cache) {
+			var scope = this;
 			var image = document.createElementNS('http://www.w3.org/1999/xhtml', 'img');
 
 			function onImageLoad() {
 				image.removeEventListener('load', onImageLoad, false);
 				image.removeEventListener('error', onImageError, false);
-				Cache.add(url, this);
+
+				if (cache) {
+					var base64 = scope.toBase64(this);
+
+					if (base64) {
+						Cache.add(src, base64);
+					}
+				}
+
 				if (onLoad) onLoad(this);
-				scope.manager.itemEnd(url);
+				scope.manager.itemEnd(src);
 			}
 
 			function onImageError(event) {
 				image.removeEventListener('load', onImageLoad, false);
 				image.removeEventListener('error', onImageError, false);
 				if (onError) onError(event);
-				scope.manager.itemError(url);
-				scope.manager.itemEnd(url);
+				scope.manager.itemError(src);
+				scope.manager.itemEnd(src);
 			}
 
 			image.addEventListener('load', onImageLoad, false);
 			image.addEventListener('error', onImageError, false);
 
-			if (url.substr(0, 5) !== 'data:') {
+			if (src.substr(0, 5) !== 'data:') {
 				if (this.crossOrigin !== undefined) image.crossOrigin = this.crossOrigin;
 			}
 
-			scope.manager.itemStart(url);
-			image.src = url;
+			scope.manager.itemStart(src);
+			image.src = src;
 			return image;
+		},
+		load: function load(url, onLoad, onProgress, onError) {
+			if (this.path !== undefined) url = this.path + url;
+			url = this.manager.resolveURL(url);
+			var scope = this;
+			Cache.get(url, function (cached) {
+				if (cached !== undefined) {
+					scope.manager.itemStart(url);
+					return scope.toImage(cached, onLoad, onProgress, onError, false);
+				}
+
+				return scope.toImage(url, onLoad, onProgress, onError, true);
+			});
 		}
 	});
 
@@ -30133,37 +30232,39 @@
 			return this;
 		},
 		load: function load(url, onLoad, onProgress, onError) {
+			var _this = this;
+
 			if (url === undefined) url = '';
 			if (this.path !== undefined) url = this.path + url;
 			url = this.manager.resolveURL(url);
 			var scope = this;
-			var cached = Cache.get(url);
+			Cache.get(url, function (cached) {
+				if (cached !== undefined) {
+					scope.manager.itemStart(url);
+					setTimeout(function () {
+						if (onLoad) onLoad(cached);
+						scope.manager.itemEnd(url);
+					}, 0);
+					return cached;
+				}
 
-			if (cached !== undefined) {
-				scope.manager.itemStart(url);
-				setTimeout(function () {
-					if (onLoad) onLoad(cached);
+				var fetchOptions = {};
+				fetchOptions.credentials = _this.crossOrigin === 'anonymous' ? 'same-origin' : 'include';
+				fetch(url, fetchOptions).then(function (res) {
+					return res.blob();
+				}).then(function (blob) {
+					return createImageBitmap(blob, scope.options);
+				}).then(function (imageBitmap) {
+					Cache.add(url, imageBitmap);
+					if (onLoad) onLoad(imageBitmap);
 					scope.manager.itemEnd(url);
-				}, 0);
-				return cached;
-			}
-
-			var fetchOptions = {};
-			fetchOptions.credentials = this.crossOrigin === 'anonymous' ? 'same-origin' : 'include';
-			fetch(url, fetchOptions).then(function (res) {
-				return res.blob();
-			}).then(function (blob) {
-				return createImageBitmap(blob, scope.options);
-			}).then(function (imageBitmap) {
-				Cache.add(url, imageBitmap);
-				if (onLoad) onLoad(imageBitmap);
-				scope.manager.itemEnd(url);
-			}).catch(function (e) {
-				if (onError) onError(e);
-				scope.manager.itemError(url);
-				scope.manager.itemEnd(url);
+				}).catch(function (e) {
+					if (onError) onError(e);
+					scope.manager.itemError(url);
+					scope.manager.itemEnd(url);
+				});
+				scope.manager.itemStart(url);
 			});
-			scope.manager.itemStart(url);
 		}
 	});
 
@@ -37166,3 +37267,4 @@
 	Object.defineProperty(exports, '__esModule', { value: true });
 
 })));
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUuanMiLCJzb3VyY2VzIjpbXSwic291cmNlc0NvbnRlbnQiOltdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiIn0=

@@ -45,53 +45,55 @@ ImageBitmapLoader.prototype = Object.assign( Object.create( Loader.prototype ), 
 
 		const scope = this;
 
-		const cached = Cache.get( url );
+		Cache.get( url, ( cached ) => {
 
-		if ( cached !== undefined ) {
+			if ( cached !== undefined ) {
 
-			scope.manager.itemStart( url );
+				scope.manager.itemStart( url );
 
-			setTimeout( function () {
+				setTimeout( function () {
 
-				if ( onLoad ) onLoad( cached );
+					if ( onLoad ) onLoad( cached );
+
+					scope.manager.itemEnd( url );
+
+				}, 0 );
+
+				return cached;
+
+			}
+
+			const fetchOptions = {};
+			fetchOptions.credentials = ( this.crossOrigin === 'anonymous' ) ? 'same-origin' : 'include';
+
+			fetch( url, fetchOptions ).then( function ( res ) {
+
+				return res.blob();
+
+			} ).then( function ( blob ) {
+
+				return createImageBitmap( blob, scope.options );
+
+			} ).then( function ( imageBitmap ) {
+
+				Cache.add( url, imageBitmap );
+
+				if ( onLoad ) onLoad( imageBitmap );
 
 				scope.manager.itemEnd( url );
 
-			}, 0 );
+			} ).catch( function ( e ) {
 
-			return cached;
+				if ( onError ) onError( e );
 
-		}
+				scope.manager.itemError( url );
+				scope.manager.itemEnd( url );
 
-		const fetchOptions = {};
-		fetchOptions.credentials = ( this.crossOrigin === 'anonymous' ) ? 'same-origin' : 'include';
+			} );
 
-		fetch( url, fetchOptions ).then( function ( res ) {
-
-			return res.blob();
-
-		} ).then( function ( blob ) {
-
-			return createImageBitmap( blob, scope.options );
-
-		} ).then( function ( imageBitmap ) {
-
-			Cache.add( url, imageBitmap );
-
-			if ( onLoad ) onLoad( imageBitmap );
-
-			scope.manager.itemEnd( url );
-
-		} ).catch( function ( e ) {
-
-			if ( onError ) onError( e );
-
-			scope.manager.itemError( url );
-			scope.manager.itemEnd( url );
+			scope.manager.itemStart( url );
 
 		} );
-
-		scope.manager.itemStart( url );
 
 	}
 

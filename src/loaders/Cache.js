@@ -4,35 +4,129 @@ const Cache = {
 
 	files: {},
 
-	add: function ( key, file ) {
+	addFn: null,
 
-		if ( this.enabled === false ) return;
+	getFn: null,
 
-		// console.log( 'THREE.Cache', 'Adding key:', key );
+	removeFn: null,
 
-		this.files[ key ] = file;
+	useCache: function ( { add, get, remove, clear } = {} ) {
 
-	},
+		if ( typeof add === 'function' ) this.addFn = add.bind( this );
 
-	get: function ( key ) {
+		if ( typeof get === 'function' ) this.getFn = get.bind( this );
 
-		if ( this.enabled === false ) return;
+		if ( typeof remove === 'function' ) this.removeFn = remove.bind( this );
 
-		// console.log( 'THREE.Cache', 'Checking key:', key );
-
-		return this.files[ key ];
+		if ( typeof clear === 'function' ) this.clearFn = clear.bind( this );
 
 	},
 
-	remove: function ( key ) {
+	add: function ( key, file, callback = () => {} ) {
 
-		delete this.files[ key ];
+		if ( this.enabled === false ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		const isBlob = key.match(/^blob:.+/);
+
+		if ( isBlob ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		console.log( 'THREE.Cache', 'Adding key:', key );
+
+		if ( this.addFn ) {
+
+			this.addFn( key, file, callback );
+
+		} else {
+
+			this.files[ key ] = file;
+
+			callback();
+
+		}
 
 	},
 
-	clear: function () {
+	get: function ( key, callback = () => {} ) {
 
-		this.files = {};
+		if ( this.enabled === false ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		const isBlob = key.match(/^blob:.+/);
+
+		if ( isBlob ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		console.log( 'THREE.Cache', 'Checking key:', key );
+
+		if ( this.getFn ) {
+
+			return this.getFn( key, callback );
+
+		} else {
+
+			callback( this.files[ key ] );
+
+			return this.files[ key ];
+
+		}
+
+	},
+
+	remove: function ( key, callback = () => {} ) {
+
+		console.log( 'THREE.Cache', 'Removing key:', key );
+
+		if ( this.removeFn ) {
+
+			this.removeFn( key, callback );
+
+		} else {
+
+			delete this.files[ key ];
+
+			callback();
+
+		}
+
+	},
+
+	clear: function ( callback = () => {} ) {
+
+		console.log( 'THREE.Cache', 'Clearing' );
+
+		if ( this.clearFn ) {
+
+			this.clearFn( callback );
+
+		} else {
+
+			this.files = {};
+
+			callback();
+
+		}
 
 	}
 

@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - misc - local file storage</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+		<style>
+			body {
+				background-color: #bfe3dd;
+				color: #000;
+			}
+
+			a {
+				color: #2983ff;
+			}
+		</style>
+	</head>
+
+	<body>
+
+		<div id="container"></div>
+
+		<div id="info">
+			<a href="https://threejs.org" target="_blank" rel="noopener">three.js</a> webgl - misc - local file storage<br/>
+			All assets are saved to a persistent storage in binary and base64 form.<br/>
+			No requests are made after consecutive page refreshes.
+		</div>
+
+		<script src="//ghcdn.rawgit.org/localForage/localForage/master/dist/localforage.min.js"></script>
+		<script type="module">
+
+			import * as THREE from '../build/three.module.js';
+			import Stats from './jsm/libs/stats.module.js';
+
+			import { OrbitControls } from './jsm/controls/OrbitControls.js';
+			import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+			import { DRACOLoader } from './jsm/loaders/DRACOLoader.js';
+
+			// Docs:		https://localforage.github.io/localForage
+			// npm:			https://www.npmjs.com/package/localforage
+
+			localforage.config({
+				name: 'misc_load_file_storage',
+				storeName: 'three_cache'
+			});
+
+			THREE.Cache.enabled = true;
+
+			THREE.Cache.useCache({
+
+				add: ( key, value, callback ) => {
+
+					localforage.setItem( key, value, callback );
+
+				},
+
+				get: ( key, callback ) => {
+
+					return localforage.getItem( key, function ( error, value ) {
+						
+						// NOTE By default local storage returns only null, never undefined
+
+						if ( value === null ) {
+
+							callback( undefined );
+
+						} else {
+							
+							callback( value );
+
+						}
+
+					});
+
+				},
+
+				remove: ( key, callback ) => {
+
+					localforage.removeItem( key, callback );
+
+				},
+
+				clear: () => {
+
+					localforage.clear();
+
+				}
+
+			});
+
+			var scene, camera, dirLight, stats;
+			var renderer, controls;
+
+			var clock = new THREE.Clock();
+			var container = document.getElementById( 'container' );
+
+			stats = new Stats();
+			container.appendChild( stats.dom );
+
+			renderer = new THREE.WebGLRenderer( { antialias: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.outputEncoding = THREE.sRGBEncoding;
+			container.appendChild( renderer.domElement );
+
+			scene = new THREE.Scene();
+			scene.background = new THREE.Color( 0xffa969 );
+
+			camera = new THREE.PerspectiveCamera( 40, window.innerWidth / window.innerHeight, 1, 100 );
+			camera.position.set( 5, 2, 8 );
+
+			controls = new OrbitControls( camera, renderer.domElement );
+			controls.target.set( 0, 0.5, 0 );
+			controls.update();
+			controls.enablePan = false;
+			controls.enableDamping = true;
+
+			scene.add( new THREE.HemisphereLight( 0xffa969, 0x484a59, 0.4 ) );
+
+			dirLight = new THREE.DirectionalLight( 0xffffff, 1 );
+			dirLight.position.set( 5, 2, 8 );
+			scene.add( dirLight );
+
+			// envmap
+			var path = 'textures/cube/Park2/';
+			var format = '.jpg';
+			var envMap = new THREE.CubeTextureLoader().load( [
+				path + 'posx' + format, path + 'negx' + format,
+				path + 'posy' + format, path + 'negy' + format,
+				path + 'posz' + format, path + 'negz' + format
+			] );
+
+			var models = [
+				[ 'models/gltf/DamagedHelmet/glTF/DamagedHelmet.gltf', 1 ],
+				[ 'models/gltf/LittlestTokyo.glb', 0.01 ],
+				[ 'models/gltf/Nefertiti/Nefertiti.glb', 0.05 ],
+				[ 'models/gltf/MetalRoughSpheres/glTF/MetalRoughSpheres.gltf', 0.5 ],
+				[ 'models/gltf/Duck/glTF/Duck.gltf', 0.5 ],
+			];
+
+			var dracoLoader = new DRACOLoader();
+			dracoLoader.setDecoderPath( 'js/libs/draco/gltf/' );
+
+			var loader = new GLTFLoader();
+			loader.setDRACOLoader( dracoLoader );
+
+			var dAngle = Math.PI * 2 / models.length;
+			
+			models.forEach(function ( [ path, scale ], index ) {
+
+
+				loader.load( path, function ({ scene: model }) {
+
+					model.traverse( function ( child ) {
+
+						if ( child.isMesh ) child.material.envMap = envMap;
+
+					} );
+
+					model.scale.setScalar( scale );
+					model.position.set( 5, 0, 0 ).applyAxisAngle( new THREE.Vector3( 0, 1, 0 ), dAngle * index )
+
+					scene.add( model );
+
+				}, undefined, function ( e ) {
+
+					console.error( e );
+
+				} );
+
+			});
+
+
+			window.onresize = function () {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+			};
+
+			animate();
+
+			function animate() {
+
+				requestAnimationFrame( animate );
+
+				controls.update();
+
+				stats.update();
+
+				renderer.render( scene, camera );
+
+			}
+
+
+		</script>
+
+	</body>
+
+</html>

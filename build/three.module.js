@@ -36063,35 +36063,129 @@ const Cache = {
 
 	files: {},
 
-	add: function ( key, file ) {
+	addFn: null,
 
-		if ( this.enabled === false ) return;
+	getFn: null,
 
-		// console.log( 'THREE.Cache', 'Adding key:', key );
+	removeFn: null,
 
-		this.files[ key ] = file;
+	useCache: function ( { add, get, remove, clear } = {} ) {
 
-	},
+		if ( typeof add === 'function' ) this.addFn = add.bind( this );
 
-	get: function ( key ) {
+		if ( typeof get === 'function' ) this.getFn = get.bind( this );
 
-		if ( this.enabled === false ) return;
+		if ( typeof remove === 'function' ) this.removeFn = remove.bind( this );
 
-		// console.log( 'THREE.Cache', 'Checking key:', key );
-
-		return this.files[ key ];
+		if ( typeof clear === 'function' ) this.clearFn = clear.bind( this );
 
 	},
 
-	remove: function ( key ) {
+	add: function ( key, file, callback = () => {} ) {
 
-		delete this.files[ key ];
+		if ( this.enabled === false ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		const isBlob = key.match(/^blob:.+/);
+
+		if ( isBlob ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		console.log( 'THREE.Cache', 'Adding key:', key );
+
+		if ( this.addFn ) {
+
+			this.addFn( key, file, callback );
+
+		} else {
+
+			this.files[ key ] = file;
+
+			callback();
+
+		}
 
 	},
 
-	clear: function () {
+	get: function ( key, callback = () => {} ) {
 
-		this.files = {};
+		if ( this.enabled === false ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		const isBlob = key.match(/^blob:.+/);
+
+		if ( isBlob ) {
+
+			callback( undefined );
+
+			return;
+
+		}
+
+		console.log( 'THREE.Cache', 'Checking key:', key );
+
+		if ( this.getFn ) {
+
+			return this.getFn( key, callback );
+
+		} else {
+
+			callback( this.files[ key ] );
+
+			return this.files[ key ];
+
+		}
+
+	},
+
+	remove: function ( key, callback = () => {} ) {
+
+		console.log( 'THREE.Cache', 'Removing key:', key );
+
+		if ( this.removeFn ) {
+
+			this.removeFn( key, callback );
+
+		} else {
+
+			delete this.files[ key ];
+
+			callback();
+
+		}
+
+	},
+
+	clear: function ( callback = () => {} ) {
+
+		console.log( 'THREE.Cache', 'Clearing' );
+
+		if ( this.clearFn ) {
+
+			this.clearFn( callback );
+
+		} else {
+
+			this.files = {};
+
+			callback();
+
+		}
 
 	}
 
@@ -36323,177 +36417,210 @@ FileLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 		const scope = this;
 
-		const cached = Cache.get( url );
+		Cache.get( url, function ( cached ) {
 
-		if ( cached !== undefined ) {
+			if ( cached !== undefined ) {
 
-			scope.manager.itemStart( url );
+				scope.manager.itemStart( url );
 
-			setTimeout( function () {
-
-				if ( onLoad ) onLoad( cached );
-
-				scope.manager.itemEnd( url );
-
-			}, 0 );
-
-			return cached;
-
-		}
-
-		// Check if request is duplicate
-
-		if ( loading[ url ] !== undefined ) {
-
-			loading[ url ].push( {
-
-				onLoad: onLoad,
-				onProgress: onProgress,
-				onError: onError
-
-			} );
-
-			return;
-
-		}
-
-		// Check for data: URI
-		const dataUriRegex = /^data:(.*?)(;base64)?,(.*)$/;
-		const dataUriRegexResult = url.match( dataUriRegex );
-		let request;
-
-		// Safari can not handle Data URIs through XMLHttpRequest so process manually
-		if ( dataUriRegexResult ) {
-
-			const mimeType = dataUriRegexResult[ 1 ];
-			const isBase64 = !! dataUriRegexResult[ 2 ];
-
-			let data = dataUriRegexResult[ 3 ];
-			data = decodeURIComponent( data );
-
-			if ( isBase64 ) data = atob( data );
-
-			try {
-
-				let response;
-				const responseType = ( this.responseType || '' ).toLowerCase();
-
-				switch ( responseType ) {
-
-					case 'arraybuffer':
-					case 'blob':
-
-						const view = new Uint8Array( data.length );
-
-						for ( let i = 0; i < data.length; i ++ ) {
-
-							view[ i ] = data.charCodeAt( i );
-
-						}
-
-						if ( responseType === 'blob' ) {
-
-							response = new Blob( [ view.buffer ], { type: mimeType } );
-
-						} else {
-
-							response = view.buffer;
-
-						}
-
-						break;
-
-					case 'document':
-
-						const parser = new DOMParser();
-						response = parser.parseFromString( data, mimeType );
-
-						break;
-
-					case 'json':
-
-						response = JSON.parse( data );
-
-						break;
-
-					default: // 'text' or other
-
-						response = data;
-
-						break;
-
-				}
-
-				// Wait for next browser tick like standard XMLHttpRequest event dispatching does
 				setTimeout( function () {
 
-					if ( onLoad ) onLoad( response );
+					if ( onLoad ) onLoad( cached );
 
 					scope.manager.itemEnd( url );
 
 				}, 0 );
 
-			} catch ( error ) {
-
-				// Wait for next browser tick like standard XMLHttpRequest event dispatching does
-				setTimeout( function () {
-
-					if ( onError ) onError( error );
-
-					scope.manager.itemError( url );
-					scope.manager.itemEnd( url );
-
-				}, 0 );
+				return cached;
 
 			}
 
-		} else {
+			// Check if request is duplicate
 
-			// Initialise array for duplicate requests
+			if ( loading[ url ] !== undefined ) {
 
-			loading[ url ] = [];
+				loading[ url ].push( {
 
-			loading[ url ].push( {
+					onLoad: onLoad,
+					onProgress: onProgress,
+					onError: onError
 
-				onLoad: onLoad,
-				onProgress: onProgress,
-				onError: onError
+				} );
 
-			} );
+				return;
 
-			request = new XMLHttpRequest();
+			}
 
-			request.open( 'GET', url, true );
+			// Check for data: URI
+			const dataUriRegex = /^data:(.*?)(;base64)?,(.*)$/;
+			const dataUriRegexResult = url.match( dataUriRegex );
+			let request;
 
-			request.addEventListener( 'load', function ( event ) {
+			// Safari can not handle Data URIs through XMLHttpRequest so process manually
+			if ( dataUriRegexResult ) {
 
-				const response = this.response;
+				const mimeType = dataUriRegexResult[ 1 ];
+				const isBase64 = !! dataUriRegexResult[ 2 ];
 
-				const callbacks = loading[ url ];
+				let data = dataUriRegexResult[ 3 ];
+				data = decodeURIComponent( data );
 
-				delete loading[ url ];
+				if ( isBase64 ) data = atob( data );
 
-				if ( this.status === 200 || this.status === 0 ) {
+				try {
 
-					// Some browsers return HTTP Status 0 when using non-http protocol
-					// e.g. 'file://' or 'data://'. Handle as success.
+					let response;
+					const responseType = ( scope.responseType || '' ).toLowerCase();
 
-					if ( this.status === 0 ) console.warn( 'THREE.FileLoader: HTTP Status 0 received.' );
+					switch ( responseType ) {
 
-					// Add to cache only on HTTP success, so that we do not cache
-					// error response bodies as proper responses to requests.
-					Cache.add( url, response );
+						case 'arraybuffer':
+						case 'blob':
+
+							const view = new Uint8Array( data.length );
+
+							for ( let i = 0; i < data.length; i ++ ) {
+
+								view[ i ] = data.charCodeAt( i );
+
+							}
+
+							if ( responseType === 'blob' ) {
+
+								response = new Blob( [ view.buffer ], { type: mimeType } );
+
+							} else {
+
+								response = view.buffer;
+
+							}
+
+							break;
+
+						case 'document':
+
+							const parser = new DOMParser();
+							response = parser.parseFromString( data, mimeType );
+
+							break;
+
+						case 'json':
+
+							response = JSON.parse( data );
+
+							break;
+
+						default: // 'text' or other
+
+							response = data;
+
+							break;
+
+					}
+
+					// Wait for next browser tick like standard XMLHttpRequest event dispatching does
+					setTimeout( function () {
+
+						if ( onLoad ) onLoad( response );
+
+						scope.manager.itemEnd( url );
+
+					}, 0 );
+
+				} catch ( error ) {
+
+					// Wait for next browser tick like standard XMLHttpRequest event dispatching does
+					setTimeout( function () {
+
+						if ( onError ) onError( error );
+
+						scope.manager.itemError( url );
+						scope.manager.itemEnd( url );
+
+					}, 0 );
+
+				}
+
+			} else {
+
+				// Initialise array for duplicate requests
+
+				loading[ url ] = [];
+
+				loading[ url ].push( {
+
+					onLoad: onLoad,
+					onProgress: onProgress,
+					onError: onError
+
+				} );
+
+				request = new XMLHttpRequest();
+
+				request.open( 'GET', url, true );
+
+				request.addEventListener( 'load', function ( event ) {
+
+					const response = this.response;
+
+					const callbacks = loading[ url ];
+
+					delete loading[ url ];
+
+					if ( this.status === 200 || this.status === 0 ) {
+
+						// Some browsers return HTTP Status 0 when using non-http protocol
+						// e.g. 'file://' or 'data://'. Handle as success.
+
+						if ( this.status === 0 ) console.warn( 'THREE.FileLoader: HTTP Status 0 received.' );
+
+						// Add to cache only on HTTP success, so that we do not cache
+						// error response bodies as proper responses to requests.
+						Cache.add( url, response );
+
+						for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
+
+							const callback = callbacks[ i ];
+							if ( callback.onLoad ) callback.onLoad( response );
+
+						}
+
+						scope.manager.itemEnd( url );
+
+					} else {
+
+						for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
+
+							const callback = callbacks[ i ];
+							if ( callback.onError ) callback.onError( event );
+
+						}
+
+						scope.manager.itemError( url );
+						scope.manager.itemEnd( url );
+
+					}
+
+				}, false );
+
+				request.addEventListener( 'progress', function ( event ) {
+
+					const callbacks = loading[ url ];
 
 					for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
 
 						const callback = callbacks[ i ];
-						if ( callback.onLoad ) callback.onLoad( response );
+						if ( callback.onProgress ) callback.onProgress( event );
 
 					}
 
-					scope.manager.itemEnd( url );
+				}, false );
 
-				} else {
+				request.addEventListener( 'error', function ( event ) {
+
+					const callbacks = loading[ url ];
+
+					delete loading[ url ];
 
 					for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
 
@@ -36505,77 +36632,46 @@ FileLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 					scope.manager.itemError( url );
 					scope.manager.itemEnd( url );
 
-				}
+				}, false );
 
-			}, false );
+				request.addEventListener( 'abort', function ( event ) {
 
-			request.addEventListener( 'progress', function ( event ) {
+					const callbacks = loading[ url ];
 
-				const callbacks = loading[ url ];
+					delete loading[ url ];
 
-				for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
+					for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
 
-					const callback = callbacks[ i ];
-					if ( callback.onProgress ) callback.onProgress( event );
+						const callback = callbacks[ i ];
+						if ( callback.onError ) callback.onError( event );
 
-				}
+					}
 
-			}, false );
+					scope.manager.itemError( url );
+					scope.manager.itemEnd( url );
 
-			request.addEventListener( 'error', function ( event ) {
+				}, false );
 
-				const callbacks = loading[ url ];
+				if ( scope.responseType !== undefined ) request.responseType = scope.responseType;
+				if ( scope.withCredentials !== undefined ) request.withCredentials = scope.withCredentials;
 
-				delete loading[ url ];
+				if ( request.overrideMimeType ) request.overrideMimeType( scope.mimeType !== undefined ? scope.mimeType : 'text/plain' );
 
-				for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
+				for ( const header in scope.requestHeader ) {
 
-					const callback = callbacks[ i ];
-					if ( callback.onError ) callback.onError( event );
-
-				}
-
-				scope.manager.itemError( url );
-				scope.manager.itemEnd( url );
-
-			}, false );
-
-			request.addEventListener( 'abort', function ( event ) {
-
-				const callbacks = loading[ url ];
-
-				delete loading[ url ];
-
-				for ( let i = 0, il = callbacks.length; i < il; i ++ ) {
-
-					const callback = callbacks[ i ];
-					if ( callback.onError ) callback.onError( event );
+					request.setRequestHeader( header, scope.requestHeader[ header ] );
 
 				}
 
-				scope.manager.itemError( url );
-				scope.manager.itemEnd( url );
-
-			}, false );
-
-			if ( this.responseType !== undefined ) request.responseType = this.responseType;
-			if ( this.withCredentials !== undefined ) request.withCredentials = this.withCredentials;
-
-			if ( request.overrideMimeType ) request.overrideMimeType( this.mimeType !== undefined ? this.mimeType : 'text/plain' );
-
-			for ( const header in this.requestHeader ) {
-
-				request.setRequestHeader( header, this.requestHeader[ header ] );
+				request.send( null );
 
 			}
 
-			request.send( null );
+			scope.manager.itemStart( url );
 
-		}
+			return request;
 
-		scope.manager.itemStart( url );
-
-		return request;
+		} );
 
 	},
 
@@ -36795,31 +36891,29 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 	constructor: ImageLoader,
 
-	load: function ( url, onLoad, onProgress, onError ) {
+	toBase64: function ( image ) {
 
-		if ( this.path !== undefined ) url = this.path + url;
+		if ( typeof document === 'undefined' ) {
 
-		url = this.manager.resolveURL( url );
-
-		const scope = this;
-
-		const cached = Cache.get( url );
-
-		if ( cached !== undefined ) {
-
-			scope.manager.itemStart( url );
-
-			setTimeout( function () {
-
-				if ( onLoad ) onLoad( cached );
-
-				scope.manager.itemEnd( url );
-
-			}, 0 );
-
-			return cached;
+			return;
 
 		}
+
+		const canvas = document.createElement( 'canvas' );
+		const context = canvas.getContext( '2d' );
+
+		canvas.width = image.naturalWidth || image.width || 'auto';
+		canvas.height = image.naturalHeight || image.height || 'auto';
+
+		context.drawImage( image, 0, 0 );
+
+		return canvas.toDataURL();
+
+	},
+
+	toImage: function ( src, onLoad, onProgress, onError, cache ) {
+
+		const scope = this;
 
 		const image = document.createElementNS( 'http://www.w3.org/1999/xhtml', 'img' );
 
@@ -36828,11 +36922,21 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 			image.removeEventListener( 'load', onImageLoad, false );
 			image.removeEventListener( 'error', onImageError, false );
 
-			Cache.add( url, this );
+			if ( cache ) {
+
+				const base64 = scope.toBase64( this );
+
+				if ( base64 ) {
+
+					Cache.add( src, base64 );
+
+				}
+
+			}
 
 			if ( onLoad ) onLoad( this );
 
-			scope.manager.itemEnd( url );
+			scope.manager.itemEnd( src );
 
 		}
 
@@ -36843,25 +36947,49 @@ ImageLoader.prototype = Object.assign( Object.create( Loader.prototype ), {
 
 			if ( onError ) onError( event );
 
-			scope.manager.itemError( url );
-			scope.manager.itemEnd( url );
+			scope.manager.itemError( src );
+			scope.manager.itemEnd( src );
 
 		}
 
 		image.addEventListener( 'load', onImageLoad, false );
 		image.addEventListener( 'error', onImageError, false );
 
-		if ( url.substr( 0, 5 ) !== 'data:' ) {
+		if ( src.substr( 0, 5 ) !== 'data:' ) {
 
 			if ( this.crossOrigin !== undefined ) image.crossOrigin = this.crossOrigin;
 
 		}
 
-		scope.manager.itemStart( url );
+		scope.manager.itemStart( src );
 
-		image.src = url;
+		image.src = src;
 
 		return image;
+
+	},
+
+	load: function ( url, onLoad, onProgress, onError ) {
+
+		if ( this.path !== undefined ) url = this.path + url;
+
+		url = this.manager.resolveURL( url );
+
+		const scope = this;
+
+		Cache.get( url, ( cached ) => {
+
+			if ( cached !== undefined ) {
+
+				scope.manager.itemStart( url );
+
+				return scope.toImage( cached, onLoad, onProgress, onError, false );
+
+			}
+
+			return scope.toImage( url, onLoad, onProgress, onError, true );
+
+		} );
 
 	}
 
@@ -41671,53 +41799,55 @@ ImageBitmapLoader.prototype = Object.assign( Object.create( Loader.prototype ), 
 
 		const scope = this;
 
-		const cached = Cache.get( url );
+		Cache.get( url, ( cached ) => {
 
-		if ( cached !== undefined ) {
+			if ( cached !== undefined ) {
 
-			scope.manager.itemStart( url );
+				scope.manager.itemStart( url );
 
-			setTimeout( function () {
+				setTimeout( function () {
 
-				if ( onLoad ) onLoad( cached );
+					if ( onLoad ) onLoad( cached );
+
+					scope.manager.itemEnd( url );
+
+				}, 0 );
+
+				return cached;
+
+			}
+
+			const fetchOptions = {};
+			fetchOptions.credentials = ( this.crossOrigin === 'anonymous' ) ? 'same-origin' : 'include';
+
+			fetch( url, fetchOptions ).then( function ( res ) {
+
+				return res.blob();
+
+			} ).then( function ( blob ) {
+
+				return createImageBitmap( blob, scope.options );
+
+			} ).then( function ( imageBitmap ) {
+
+				Cache.add( url, imageBitmap );
+
+				if ( onLoad ) onLoad( imageBitmap );
 
 				scope.manager.itemEnd( url );
 
-			}, 0 );
+			} ).catch( function ( e ) {
 
-			return cached;
+				if ( onError ) onError( e );
 
-		}
+				scope.manager.itemError( url );
+				scope.manager.itemEnd( url );
 
-		const fetchOptions = {};
-		fetchOptions.credentials = ( this.crossOrigin === 'anonymous' ) ? 'same-origin' : 'include';
+			} );
 
-		fetch( url, fetchOptions ).then( function ( res ) {
-
-			return res.blob();
-
-		} ).then( function ( blob ) {
-
-			return createImageBitmap( blob, scope.options );
-
-		} ).then( function ( imageBitmap ) {
-
-			Cache.add( url, imageBitmap );
-
-			if ( onLoad ) onLoad( imageBitmap );
-
-			scope.manager.itemEnd( url );
-
-		} ).catch( function ( e ) {
-
-			if ( onError ) onError( e );
-
-			scope.manager.itemError( url );
-			scope.manager.itemEnd( url );
+			scope.manager.itemStart( url );
 
 		} );
-
-		scope.manager.itemStart( url );
 
 	}
 
@@ -50980,3 +51110,4 @@ if ( typeof __THREE_DEVTOOLS__ !== 'undefined' ) {
 }
 
 export { ACESFilmicToneMapping, AddEquation, AddOperation, AdditiveAnimationBlendMode, AdditiveBlending, AlphaFormat, AlwaysDepth, AlwaysStencilFunc, AmbientLight, AmbientLightProbe, AnimationClip, AnimationLoader, AnimationMixer, AnimationObjectGroup, AnimationUtils, ArcCurve, ArrayCamera, ArrowHelper, Audio, AudioAnalyser, AudioContext, AudioListener, AudioLoader, AxesHelper, AxisHelper, BackSide, BasicDepthPacking, BasicShadowMap, BinaryTextureLoader, Bone, BooleanKeyframeTrack, BoundingBoxHelper, Box2, Box3, Box3Helper, BoxBufferGeometry, BoxGeometry, BoxHelper, BufferAttribute, BufferGeometry, BufferGeometryLoader, ByteType, Cache, Camera, CameraHelper, CanvasRenderer, CanvasTexture, CatmullRomCurve3, CineonToneMapping, CircleBufferGeometry, CircleGeometry, ClampToEdgeWrapping, Clock, ClosedSplineCurve3, Color, ColorKeyframeTrack, CompressedTexture, CompressedTextureLoader, ConeBufferGeometry, ConeGeometry, CubeCamera, BoxGeometry as CubeGeometry, CubeReflectionMapping, CubeRefractionMapping, CubeTexture, CubeTextureLoader, CubeUVReflectionMapping, CubeUVRefractionMapping, CubicBezierCurve, CubicBezierCurve3, CubicInterpolant, CullFaceBack, CullFaceFront, CullFaceFrontBack, CullFaceNone, Curve, CurvePath, CustomBlending, CustomToneMapping, CylinderBufferGeometry, CylinderGeometry, Cylindrical, DataTexture, DataTexture2DArray, DataTexture3D, DataTextureLoader, DecrementStencilOp, DecrementWrapStencilOp, DefaultLoadingManager, DepthFormat, DepthStencilFormat, DepthTexture, DirectionalLight, DirectionalLightHelper, DiscreteInterpolant, DodecahedronBufferGeometry, DodecahedronGeometry, DoubleSide, DstAlphaFactor, DstColorFactor, DynamicBufferAttribute, DynamicCopyUsage, DynamicDrawUsage, DynamicReadUsage, EdgesGeometry, EdgesHelper, EllipseCurve, EqualDepth, EqualStencilFunc, EquirectangularReflectionMapping, EquirectangularRefractionMapping, Euler, EventDispatcher, ExtrudeBufferGeometry, ExtrudeGeometry, Face3, Face4, FaceColors, FileLoader, FlatShading, Float32Attribute, Float32BufferAttribute, Float64Attribute, Float64BufferAttribute, FloatType, Fog, FogExp2, Font, FontLoader, FrontSide, Frustum, GLBufferAttribute, GLSL1, GLSL3, GammaEncoding, Geometry, GeometryUtils, GreaterDepth, GreaterEqualDepth, GreaterEqualStencilFunc, GreaterStencilFunc, GridHelper, Group, HalfFloatType, HemisphereLight, HemisphereLightHelper, HemisphereLightProbe, IcosahedronBufferGeometry, IcosahedronGeometry, ImageBitmapLoader, ImageLoader, ImageUtils, ImmediateRenderObject, IncrementStencilOp, IncrementWrapStencilOp, InstancedBufferAttribute, InstancedBufferGeometry, InstancedInterleavedBuffer, InstancedMesh, Int16Attribute, Int16BufferAttribute, Int32Attribute, Int32BufferAttribute, Int8Attribute, Int8BufferAttribute, IntType, InterleavedBuffer, InterleavedBufferAttribute, Interpolant, InterpolateDiscrete, InterpolateLinear, InterpolateSmooth, InvertStencilOp, JSONLoader, KeepStencilOp, KeyframeTrack, LOD, LatheBufferGeometry, LatheGeometry, Layers, LensFlare, LessDepth, LessEqualDepth, LessEqualStencilFunc, LessStencilFunc, Light, LightProbe, Line, Line3, LineBasicMaterial, LineCurve, LineCurve3, LineDashedMaterial, LineLoop, LinePieces, LineSegments, LineStrip, LinearEncoding, LinearFilter, LinearInterpolant, LinearMipMapLinearFilter, LinearMipMapNearestFilter, LinearMipmapLinearFilter, LinearMipmapNearestFilter, LinearToneMapping, Loader, LoaderUtils, LoadingManager, LogLuvEncoding, LoopOnce, LoopPingPong, LoopRepeat, LuminanceAlphaFormat, LuminanceFormat, MOUSE, Material, MaterialLoader, MathUtils as Math, MathUtils, Matrix3, Matrix4, MaxEquation, Mesh, MeshBasicMaterial, MeshDepthMaterial, MeshDistanceMaterial, MeshFaceMaterial, MeshLambertMaterial, MeshMatcapMaterial, MeshNormalMaterial, MeshPhongMaterial, MeshPhysicalMaterial, MeshStandardMaterial, MeshToonMaterial, MinEquation, MirroredRepeatWrapping, MixOperation, MultiMaterial, MultiplyBlending, MultiplyOperation, NearestFilter, NearestMipMapLinearFilter, NearestMipMapNearestFilter, NearestMipmapLinearFilter, NearestMipmapNearestFilter, NeverDepth, NeverStencilFunc, NoBlending, NoColors, NoToneMapping, NormalAnimationBlendMode, NormalBlending, NotEqualDepth, NotEqualStencilFunc, NumberKeyframeTrack, Object3D, ObjectLoader, ObjectSpaceNormalMap, OctahedronBufferGeometry, OctahedronGeometry, OneFactor, OneMinusDstAlphaFactor, OneMinusDstColorFactor, OneMinusSrcAlphaFactor, OneMinusSrcColorFactor, OrthographicCamera, PCFShadowMap, PCFSoftShadowMap, PMREMGenerator, ParametricBufferGeometry, ParametricGeometry, Particle, ParticleBasicMaterial, ParticleSystem, ParticleSystemMaterial, Path, PerspectiveCamera, Plane, PlaneBufferGeometry, PlaneGeometry, PlaneHelper, PointCloud, PointCloudMaterial, PointLight, PointLightHelper, Points, PointsMaterial, PolarGridHelper, PolyhedronBufferGeometry, PolyhedronGeometry, PositionalAudio, PropertyBinding, PropertyMixer, QuadraticBezierCurve, QuadraticBezierCurve3, Quaternion, QuaternionKeyframeTrack, QuaternionLinearInterpolant, REVISION, RGBADepthPacking, RGBAFormat, RGBAIntegerFormat, RGBA_ASTC_10x10_Format, RGBA_ASTC_10x5_Format, RGBA_ASTC_10x6_Format, RGBA_ASTC_10x8_Format, RGBA_ASTC_12x10_Format, RGBA_ASTC_12x12_Format, RGBA_ASTC_4x4_Format, RGBA_ASTC_5x4_Format, RGBA_ASTC_5x5_Format, RGBA_ASTC_6x5_Format, RGBA_ASTC_6x6_Format, RGBA_ASTC_8x5_Format, RGBA_ASTC_8x6_Format, RGBA_ASTC_8x8_Format, RGBA_BPTC_Format, RGBA_ETC2_EAC_Format, RGBA_PVRTC_2BPPV1_Format, RGBA_PVRTC_4BPPV1_Format, RGBA_S3TC_DXT1_Format, RGBA_S3TC_DXT3_Format, RGBA_S3TC_DXT5_Format, RGBDEncoding, RGBEEncoding, RGBEFormat, RGBFormat, RGBIntegerFormat, RGBM16Encoding, RGBM7Encoding, RGB_ETC1_Format, RGB_ETC2_Format, RGB_PVRTC_2BPPV1_Format, RGB_PVRTC_4BPPV1_Format, RGB_S3TC_DXT1_Format, RGFormat, RGIntegerFormat, RawShaderMaterial, Ray, Raycaster, RectAreaLight, RedFormat, RedIntegerFormat, ReinhardToneMapping, RepeatWrapping, ReplaceStencilOp, ReverseSubtractEquation, RingBufferGeometry, RingGeometry, SRGB8_ALPHA8_ASTC_10x10_Format, SRGB8_ALPHA8_ASTC_10x5_Format, SRGB8_ALPHA8_ASTC_10x6_Format, SRGB8_ALPHA8_ASTC_10x8_Format, SRGB8_ALPHA8_ASTC_12x10_Format, SRGB8_ALPHA8_ASTC_12x12_Format, SRGB8_ALPHA8_ASTC_4x4_Format, SRGB8_ALPHA8_ASTC_5x4_Format, SRGB8_ALPHA8_ASTC_5x5_Format, SRGB8_ALPHA8_ASTC_6x5_Format, SRGB8_ALPHA8_ASTC_6x6_Format, SRGB8_ALPHA8_ASTC_8x5_Format, SRGB8_ALPHA8_ASTC_8x6_Format, SRGB8_ALPHA8_ASTC_8x8_Format, Scene, SceneUtils, ShaderChunk, ShaderLib, ShaderMaterial, ShadowMaterial, Shape, ShapeBufferGeometry, ShapeGeometry, ShapePath, ShapeUtils, ShortType, Skeleton, SkeletonHelper, SkinnedMesh, SmoothShading, Sphere, SphereBufferGeometry, SphereGeometry, Spherical, SphericalHarmonics3, Spline, SplineCurve, SplineCurve3, SpotLight, SpotLightHelper, Sprite, SpriteMaterial, SrcAlphaFactor, SrcAlphaSaturateFactor, SrcColorFactor, StaticCopyUsage, StaticDrawUsage, StaticReadUsage, StereoCamera, StreamCopyUsage, StreamDrawUsage, StreamReadUsage, StringKeyframeTrack, SubtractEquation, SubtractiveBlending, TOUCH, TangentSpaceNormalMap, TetrahedronBufferGeometry, TetrahedronGeometry, TextBufferGeometry, TextGeometry, Texture, TextureLoader, TorusBufferGeometry, TorusGeometry, TorusKnotBufferGeometry, TorusKnotGeometry, Triangle, TriangleFanDrawMode, TriangleStripDrawMode, TrianglesDrawMode, TubeBufferGeometry, TubeGeometry, UVMapping, Uint16Attribute, Uint16BufferAttribute, Uint32Attribute, Uint32BufferAttribute, Uint8Attribute, Uint8BufferAttribute, Uint8ClampedAttribute, Uint8ClampedBufferAttribute, Uniform, UniformsLib, UniformsUtils, UnsignedByteType, UnsignedInt248Type, UnsignedIntType, UnsignedShort4444Type, UnsignedShort5551Type, UnsignedShort565Type, UnsignedShortType, VSMShadowMap, Vector2, Vector3, Vector4, VectorKeyframeTrack, Vertex, VertexColors, VideoTexture, WebGL1Renderer, WebGLCubeRenderTarget, WebGLMultisampleRenderTarget, WebGLRenderTarget, WebGLRenderTargetCube, WebGLRenderer, WebGLUtils, WireframeGeometry, WireframeHelper, WrapAroundEnding, XHRLoader, ZeroCurvatureEnding, ZeroFactor, ZeroSlopeEnding, ZeroStencilOp, sRGBEncoding };
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUubW9kdWxlLmpzIiwic291cmNlcyI6W10sInNvdXJjZXNDb250ZW50IjpbXSwibmFtZXMiOltdLCJtYXBwaW5ncyI6IiJ9
