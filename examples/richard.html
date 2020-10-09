@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - glTF loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+	</head>
+
+	<body>
+	    <script type="text/javascript" src="./js/boxProjectShader.js" ></script>
+		<script type="module">
+
+			import * as THREE from '../build/three.module.js';
+
+			import { OrbitControls } from './jsm/controls/OrbitControls.js';
+			import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+			import { RGBELoader } from './jsm/loaders/RGBELoader.js';
+			import { RoughnessMipmapper } from './jsm/utils/RoughnessMipmapper.js';
+			import { HDRCubeTextureLoader } from './jsm/loaders/HDRCubeTextureLoader.js';
+			import { RectAreaLightHelper } from './jsm/helpers/RectAreaLightHelper.js';
+			import { RectAreaLightUniformsLib } from './jsm/lights/RectAreaLightUniformsLib.js';
+			import { LightProbeHelper } from './jsm/helpers/LightProbeHelper.js';
+			import { LightProbeGenerator } from './jsm/lights/LightProbeGenerator.js';
+
+			var container, controls;
+			var camera, cubeCamera, scene, renderer;
+			var hdrCubeRenderTarget, cubeRenderTarget;
+			var hdrCubeMap, lightMap1, lightMap2, lightMap3, lightMap4;
+			var meshObject = new Map();
+			var meshMaterials = new Map();
+			var cubeCameraHelper;
+			var pngCubeRenderTarget, pngBackground;
+			var lightProbe;
+			var cubeMap1;
+
+			init();
+			render();
+
+			function init() {
+
+				container = document.createElement( 'div' )
+				document.body.appendChild( container );
+
+				// renderer
+				renderer = new THREE.WebGLRenderer( { antialias: true } );
+				renderer.setPixelRatio( window.devicePixelRatio );
+				renderer.setSize( window.innerWidth, window.innerHeight );
+				renderer.outputEncoding = THREE.sRGBEncoding;
+				// scene
+				scene = new THREE.Scene();
+				scene.fog = false;
+				// camera
+				camera = new THREE.PerspectiveCamera( 45, window.innerWidth / window.innerHeight, 0.25, 20 );
+				camera.position.set(.1, 1, 1.5);
+				// camera.lookAt(0, 0, -2);
+
+				// base helper
+				var axesHelper = new THREE.AxesHelper( 5 );
+				scene.add( axesHelper );
+				var size = 10;
+				var divisions = 10;
+				var gridHelper = new THREE.GridHelper( size, divisions );
+				// scene.add( gridHelper );
+
+				//  load Light
+				loadLight();
+				// renderTarget();
+				loadTexture();
+				loadMesh();
+
+
+				container.appendChild( renderer.domElement );
+				controls = new OrbitControls( camera, renderer.domElement );
+				controls.addEventListener( 'change', render ); // use if there is no animation loop
+				controls.minDistance = 2;
+				controls.maxDistance = 10;
+				controls.target.set( 0, 0, - 0.2 );
+				controls.update();
+				window.addEventListener( 'resize', onWindowResize, false );
+			}
+
+			function onWindowResize() {
+
+				camera.aspect = window.innerWidth / window.innerHeight;
+				camera.updateProjectionMatrix();
+
+				renderer.setSize( window.innerWidth, window.innerHeight );
+
+				render();
+
+			}
+
+			function render() {
+
+				renderer.render( scene, camera );
+
+			}
+
+			function updateCubeMap() {
+				var roughness = meshObject[0].material.roughness;
+
+				//disable specular highlights on walls in the environment map
+				meshObject[0].material.roughness = 1;
+
+				meshObject[0].visible = false;
+
+				cubeCamera.position.copy( meshObject[0].position );
+				cubeCameraHelper.position.set(cubeCamera.position.x, cubeCamera.position.y, cubeCamera.position.z);
+				// cubeCamera.update( renderer, scene );
+
+				//lightProbe.copy( LightProbeGenerator.fromCubeRenderTarget( renderer, cubeRenderTarget ) );
+
+				meshObject[0].material.roughness = 0.5;
+
+				meshObject[0].visible = true;
+
+				render();
+
+			}
+
+			function loadLight(){
+				// probe
+				//lightProbe = new THREE.LightProbe();
+				//scene.add( lightProbe );
+
+
+				
+				// hemisphere light
+				var light = new THREE.HemisphereLight( 0xffffbb, 0xffffbb, .5);
+				scene.add( light );
+
+				//spot light
+				var spotLight = new THREE.SpotLight( 0xffffff );
+				var spotLightHelper = new THREE.SpotLightHelper(spotLight);
+				spotLight.position.set(0, 10, 0 );
+				spotLight.castShadow = true;
+				// scene.add(spotLightHelper);
+				// scene.add(spotLight);
+
+				//amibentLight
+				var ambientLight = new THREE.AmbientLight( 0x111111 ); // soft white light
+				ambientLight.intensity = 1;
+				scene.add( ambientLight );	
+
+				//Directional light
+				var dirLight = new THREE.DirectionalLight();
+				dirLight.lookAt(0, 0, 0);
+				dirLight.intensity = 1;
+				scene.add(dirLight);
+
+
+
+
+			}
+
+			function renderTarget(){
+				// cube camera for environment map
+				cubeRenderTarget = new THREE.WebGLCubeRenderTarget( 512, {
+					format: THREE.RGBFormat,
+					generateMipmaps: true,
+					minFilter: THREE.LinearMipmapLinearFilter
+				} );
+				cubeCamera = new THREE.CubeCamera( 0.1, 10, cubeRenderTarget );
+				var position = new THREE.Vector3( 0, 1, 0 );
+				cubeCamera.position.set(position.x, position.y, position.z);
+				var geometry = new THREE.BoxGeometry( 0.1, 0.1, 0.1 );
+				var material = new THREE.MeshStandardMaterial( {color: 0x00ff00} );
+				cubeCameraHelper = new THREE.Mesh( geometry, material );
+				cubeCameraHelper.position.set(position.x, position.y, position.z);
+				scene.add( cubeCameraHelper );
+
+				var geometry = new THREE.PlaneGeometry( 1, 1, 1 );
+				var material = new THREE.MeshStandardMaterial();
+				var sphere = new THREE.Mesh( geometry, material );
+				sphere.lookAt(0, -1, 0);
+				sphere.position.set(-3, 3, 0);
+				scene.add( sphere );
+
+			}
+
+			function loadTexture(){
+				// cube map hdr Generator
+				var pmremGenerator = new THREE.PMREMGenerator(renderer);
+				pmremGenerator.compileEquirectangularShader();
+				
+				var path = 'textures/cube/SwedishRoyalCastle/';
+				var format = '.jpg';
+				var urls = [
+					path + 'px' + format, path + 'nx' + format,
+					path + 'py' + format, path + 'ny' + format,
+					path + 'pz' + format, path + 'nz' + format
+				];
+
+				var reflectionCube = new THREE.CubeTextureLoader().load( urls );
+				var refractionCube = new THREE.CubeTextureLoader().load( urls );
+				refractionCube.mapping = THREE.CubeRefractionMapping;
+
+				scene.background = reflectionCube;
+				scene.environment = reflectionCube;
+
+				// var hdrUrls = [ 'px.hdr', 'nx.hdr', 'py.hdr', 'ny.hdr', 'pz.hdr', 'nz.hdr' ];
+				// hdrCubeMap = new HDRCubeTextureLoader()
+				// 		.setPath( './textures/cube/pisaHDR/' )
+				// 		.setDataType( THREE.UnsignedByteType )
+				// 		.load( hdrUrls, function () {
+
+				// 			hdrCubeRenderTarget = pmremGenerator.fromCubemap( hdrCubeMap );
+
+				// 			hdrCubeMap.magFilter = THREE.LinearFilter;
+				// 			hdrCubeMap.needsUpdate = true;
+
+				// 		} );
+				
+			}
+			
+			function loadMesh(){
+				var loader = new GLTFLoader();
+				loader.load( 'models/gltf/sink-metal.glb', function ( gltf ) {
+					var i = 0;
+				
+				console.log('THREEJS version: ' + THREE.REVISION);
+
+					gltf.scene.traverse( function ( child ) {
+						if ( child.isMesh ) {
+							var tempName = child.name;
+							// var tempLightmap = new THREE.TextureLoader().load('mesh/test/lightmap/test_lightmaps/' + tempName + '_baked.png');
+							// tempLightmap.lightMapIntensity = 1;
+							// tempLightmap.flipY = false;
+							// tempLightmap.wrapS = THREE.RepeatWrapping;
+							// child.material.lightMap = tempLightmap;
+							// child.material.needsUpdate = true;
+							
+							// //setup EnvMap----------------------------------------------------------------------------------------------
+							// child.material.envMap = hdrCubeMap;
+							// //change EnvMap intensity
+							// child.material.envMapIntensity = 1;
+							// child.flatShading = false;
+							// console.log(i + "::" + child.name);
+							// console.log(child.material);
+							// console.log(child.geometry);
+							// meshObject.set(child.name, child);
+							
+							i++;
+						}
+					} );
+					
+					scene.add( gltf.scene );
+					changeMaterials();
+					// updateCubeMap();
+					render();
+					
+				} );
+
+			}
+
+			function changeMaterials() {
+				// to do
+			}
+
+		</script>
+
+	</body>
+</html>
