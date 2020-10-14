@@ -30,7 +30,7 @@
 		<script src="//ghcdn.rawgit.org/localForage/localForage/master/dist/localforage.min.js"></script>
 		<script type="module">
 
-			import * as THREE from '../build/three.module.js';
+			import * as THREE from '../src/Three.js'
 			import Stats from './jsm/libs/stats.module.js';
 
 			import { OrbitControls } from './jsm/controls/OrbitControls.js';
@@ -150,7 +150,7 @@
 			models.forEach(function ( [ path, scale ], index ) {
 
 
-				loader.load( path, function ({ scene: model }) {
+				loader.load( 'models/gltf/DamagedHelmet/glTF/DamagedHelmet.gltf', function ({ scene: model }) {
 
 					model.traverse( function ( child ) {
 
