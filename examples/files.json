@@ -1,7 +1,8 @@
 {
 	"experimental": [
 		"exp_exp_localfilestorage",
-		"exp_exp_loader_openvdb"
+		"exp_exp_loader_openvdb",
+		"exp_exp_ar_reflections"
 	],
 	"webgl": [
 		"webgl_animation_cloth",
