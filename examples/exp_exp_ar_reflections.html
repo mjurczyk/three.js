@@ -76,6 +76,8 @@
 					.setPath( 'textures/cube/pisaHDR/' )
 					.load( [ 'px.hdr', 'nx.hdr', 'py.hdr', 'ny.hdr', 'pz.hdr', 'nz.hdr' ],
 						function ( hdrCubeMap ) {
+							const pmremGenerator = new THREE.PMREMGenerator( renderer );
+							pmremGenerator.compileEquirectangularShader();
 
 							const hdrCubeRenderTarget = pmremGenerator.fromCubemap( hdrCubeMap );
 							hdrCubeMap.dispose();
