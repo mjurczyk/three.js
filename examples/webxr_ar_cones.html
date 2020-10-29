@@ -16,6 +16,7 @@
 
 			import * as THREE from '../build/three.module.js';
 			import { ARButton } from './jsm/webxr/ARButton.js';
+			import { HDRCubeTextureLoader } from './jsm/loaders/HDRCubeTextureLoader.js';
 
 			let camera, scene, renderer;
 			let controller;
@@ -54,17 +55,35 @@
 
 				function onSelect() {
 
-					const material = new THREE.MeshPhongMaterial( { color: 0xffffff * Math.random() } );
-					const mesh = new THREE.Mesh( geometry, material );
-					mesh.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
-					mesh.quaternion.setFromRotationMatrix( controller.matrixWorld );
-					scene.add( mesh );
+							const material = new THREE.MeshStandardMaterial( {
+								color: 0xffffff * Math.random(),
+								roughness: 0.1,
+								metalness: 0.9,
+							} );
+							const mesh = new THREE.Mesh( geometry, material );
+							mesh.position.set( 0, 0, - 0.3 ).applyMatrix4( controller.matrixWorld );
+							mesh.quaternion.setFromRotationMatrix( controller.matrixWorld );
+							scene.add( mesh );
 
 				}
 
 				controller = renderer.xr.getController( 0 );
 				controller.addEventListener( 'select', onSelect );
 				scene.add( controller );
+
+				new HDRCubeTextureLoader()
+					.setDataType( THREE.UnsignedByteType )
+					.setPath( 'textures/cube/pisaHDR/' )
+					.load( [ 'px.hdr', 'nx.hdr', 'py.hdr', 'ny.hdr', 'pz.hdr', 'nz.hdr' ],
+						function ( hdrCubeMap ) {
+
+							const hdrCubeRenderTarget = pmremGenerator.fromCubemap( hdrCubeMap );
+							hdrCubeMap.dispose();
+							pmremGenerator.dispose();
+
+							scene.background = hdrCubeRenderTarget.texture;
+							scene.environment = hdrCubeRenderTarget.texture;
+						});
 
 				//
 

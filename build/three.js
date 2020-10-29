@@ -29289,12 +29289,12 @@
 			var material = new Materials[json.type]();
 			if (json.uuid !== undefined) material.uuid = json.uuid;
 			if (json.name !== undefined) material.name = json.name;
-			if (json.color !== undefined) material.color.setHex(json.color);
+			if (json.color !== undefined && material.color !== undefined) material.color.setHex(json.color);
 			if (json.roughness !== undefined) material.roughness = json.roughness;
 			if (json.metalness !== undefined) material.metalness = json.metalness;
 			if (json.sheen !== undefined) material.sheen = new Color().setHex(json.sheen);
-			if (json.emissive !== undefined) material.emissive.setHex(json.emissive);
-			if (json.specular !== undefined) material.specular.setHex(json.specular);
+			if (json.emissive !== undefined && material.emissive !== undefined) material.emissive.setHex(json.emissive);
+			if (json.specular !== undefined && material.specular !== undefined) material.specular.setHex(json.specular);
 			if (json.shininess !== undefined) material.shininess = json.shininess;
 			if (json.clearcoat !== undefined) material.clearcoat = json.clearcoat;
 			if (json.clearcoatRoughness !== undefined) material.clearcoatRoughness = json.clearcoatRoughness;
@@ -37361,4 +37361,3 @@
 	Object.defineProperty(exports, '__esModule', { value: true });
 
 })));
-//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUuanMiLCJzb3VyY2VzIjpbXSwic291cmNlc0NvbnRlbnQiOltdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiIn0=
