@@ -7417,6 +7417,14 @@
 	Uint32BufferAttribute.prototype = Object.create(BufferAttribute.prototype);
 	Uint32BufferAttribute.prototype.constructor = Uint32BufferAttribute;
 
+	function Float16BufferAttribute(array, itemSize, normalized) {
+		BufferAttribute.call(this, new Uint16Array(array), itemSize, normalized);
+	}
+
+	Float16BufferAttribute.prototype = Object.create(BufferAttribute.prototype);
+	Float16BufferAttribute.prototype.constructor = Float16BufferAttribute;
+	Float16BufferAttribute.prototype.isFloat16BufferAttribute = true;
+
 	function Float32BufferAttribute(array, itemSize, normalized) {
 		BufferAttribute.call(this, new Float32Array(array), itemSize, normalized);
 	}
@@ -9779,7 +9787,15 @@
 			} else if (array instanceof Float64Array) {
 				console.warn('THREE.WebGLAttributes: Unsupported data buffer format: Float64Array.');
 			} else if (array instanceof Uint16Array) {
-				type = 5123;
+				if (attribute.isFloat16BufferAttribute) {
+					if (isWebGL2) {
+						type = 5131;
+					} else {
+						console.warn('THREE.WebGLAttributes: Usage of Float16BufferAttribute requires WebGL2.');
+					}
+				} else {
+					type = 5123;
+				}
 			} else if (array instanceof Int16Array) {
 				type = 5122;
 			} else if (array instanceof Uint32Array) {
@@ -18656,6 +18672,3711 @@
 		return Fog;
 	}();
 
+	/**
+	 * Extensible curve object.
+	 *
+	 * Some common of curve methods:
+	 * .getPoint( t, optionalTarget ), .getTangent( t, optionalTarget )
+	 * .getPointAt( u, optionalTarget ), .getTangentAt( u, optionalTarget )
+	 * .getPoints(), .getSpacedPoints()
+	 * .getLength()
+	 * .updateArcLengths()
+	 *
+	 * This following curves inherit from THREE.Curve:
+	 *
+	 * -- 2D curves --
+	 * THREE.ArcCurve
+	 * THREE.CubicBezierCurve
+	 * THREE.EllipseCurve
+	 * THREE.LineCurve
+	 * THREE.QuadraticBezierCurve
+	 * THREE.SplineCurve
+	 *
+	 * -- 3D curves --
+	 * THREE.CatmullRomCurve3
+	 * THREE.CubicBezierCurve3
+	 * THREE.LineCurve3
+	 * THREE.QuadraticBezierCurve3
+	 *
+	 * A series of curves can be represented as a THREE.CurvePath.
+	 *
+	 **/
+
+	function Curve() {
+		this.type = 'Curve';
+		this.arcLengthDivisions = 200;
+	}
+
+	Object.assign(Curve.prototype, {
+		// Virtual base class method to overwrite and implement in subclasses
+		//	- t [0 .. 1]
+		getPoint: function getPoint()
+		/* t, optionalTarget */
+		{
+			console.warn('THREE.Curve: .getPoint() not implemented.');
+			return null;
+		},
+		// Get point at relative position in curve according to arc length
+		// - u [0 .. 1]
+		getPointAt: function getPointAt(u, optionalTarget) {
+			var t = this.getUtoTmapping(u);
+			return this.getPoint(t, optionalTarget);
+		},
+		// Get sequence of points using getPoint( t )
+		getPoints: function getPoints(divisions) {
+			if (divisions === undefined) divisions = 5;
+			var points = [];
+
+			for (var d = 0; d <= divisions; d++) {
+				points.push(this.getPoint(d / divisions));
+			}
+
+			return points;
+		},
+		// Get sequence of points using getPointAt( u )
+		getSpacedPoints: function getSpacedPoints(divisions) {
+			if (divisions === undefined) divisions = 5;
+			var points = [];
+
+			for (var d = 0; d <= divisions; d++) {
+				points.push(this.getPointAt(d / divisions));
+			}
+
+			return points;
+		},
+		// Get total curve arc length
+		getLength: function getLength() {
+			var lengths = this.getLengths();
+			return lengths[lengths.length - 1];
+		},
+		// Get list of cumulative segment lengths
+		getLengths: function getLengths(divisions) {
+			if (divisions === undefined) divisions = this.arcLengthDivisions;
+
+			if (this.cacheArcLengths && this.cacheArcLengths.length === divisions + 1 && !this.needsUpdate) {
+				return this.cacheArcLengths;
+			}
+
+			this.needsUpdate = false;
+			var cache = [];
+			var current,
+					last = this.getPoint(0);
+			var sum = 0;
+			cache.push(0);
+
+			for (var p = 1; p <= divisions; p++) {
+				current = this.getPoint(p / divisions);
+				sum += current.distanceTo(last);
+				cache.push(sum);
+				last = current;
+			}
+
+			this.cacheArcLengths = cache;
+			return cache; // { sums: cache, sum: sum }; Sum is in the last element.
+		},
+		updateArcLengths: function updateArcLengths() {
+			this.needsUpdate = true;
+			this.getLengths();
+		},
+		// Given u ( 0 .. 1 ), get a t to find p. This gives you points which are equidistant
+		getUtoTmapping: function getUtoTmapping(u, distance) {
+			var arcLengths = this.getLengths();
+			var i = 0;
+			var il = arcLengths.length;
+			var targetArcLength; // The targeted u distance value to get
+
+			if (distance) {
+				targetArcLength = distance;
+			} else {
+				targetArcLength = u * arcLengths[il - 1];
+			} // binary search for the index with largest value smaller than target u distance
+
+
+			var low = 0,
+					high = il - 1,
+					comparison;
+
+			while (low <= high) {
+				i = Math.floor(low + (high - low) / 2); // less likely to overflow, though probably not issue here, JS doesn't really have integers, all numbers are floats
+
+				comparison = arcLengths[i] - targetArcLength;
+
+				if (comparison < 0) {
+					low = i + 1;
+				} else if (comparison > 0) {
+					high = i - 1;
+				} else {
+					high = i;
+					break; // DONE
+				}
+			}
+
+			i = high;
+
+			if (arcLengths[i] === targetArcLength) {
+				return i / (il - 1);
+			} // we could get finer grain at lengths, or use simple interpolation between two points
+
+
+			var lengthBefore = arcLengths[i];
+			var lengthAfter = arcLengths[i + 1];
+			var segmentLength = lengthAfter - lengthBefore; // determine where we are between the 'before' and 'after' points
+
+			var segmentFraction = (targetArcLength - lengthBefore) / segmentLength; // add that fractional amount to t
+
+			var t = (i + segmentFraction) / (il - 1);
+			return t;
+		},
+		// Returns a unit vector tangent at t
+		// In case any sub curve does not implement its tangent derivation,
+		// 2 points a small delta apart will be used to find its gradient
+		// which seems to give a reasonable approximation
+		getTangent: function getTangent(t, optionalTarget) {
+			var delta = 0.0001;
+			var t1 = t - delta;
+			var t2 = t + delta; // Capping in case of danger
+
+			if (t1 < 0) t1 = 0;
+			if (t2 > 1) t2 = 1;
+			var pt1 = this.getPoint(t1);
+			var pt2 = this.getPoint(t2);
+			var tangent = optionalTarget || (pt1.isVector2 ? new Vector2() : new Vector3());
+			tangent.copy(pt2).sub(pt1).normalize();
+			return tangent;
+		},
+		getTangentAt: function getTangentAt(u, optionalTarget) {
+			var t = this.getUtoTmapping(u);
+			return this.getTangent(t, optionalTarget);
+		},
+		computeFrenetFrames: function computeFrenetFrames(segments, closed) {
+			// see http://www.cs.indiana.edu/pub/techreports/TR425.pdf
+			var normal = new Vector3();
+			var tangents = [];
+			var normals = [];
+			var binormals = [];
+			var vec = new Vector3();
+			var mat = new Matrix4(); // compute the tangent vectors for each segment on the curve
+
+			for (var i = 0; i <= segments; i++) {
+				var u = i / segments;
+				tangents[i] = this.getTangentAt(u, new Vector3());
+				tangents[i].normalize();
+			} // select an initial normal vector perpendicular to the first tangent vector,
+			// and in the direction of the minimum tangent xyz component
+
+
+			normals[0] = new Vector3();
+			binormals[0] = new Vector3();
+			var min = Number.MAX_VALUE;
+			var tx = Math.abs(tangents[0].x);
+			var ty = Math.abs(tangents[0].y);
+			var tz = Math.abs(tangents[0].z);
+
+			if (tx <= min) {
+				min = tx;
+				normal.set(1, 0, 0);
+			}
+
+			if (ty <= min) {
+				min = ty;
+				normal.set(0, 1, 0);
+			}
+
+			if (tz <= min) {
+				normal.set(0, 0, 1);
+			}
+
+			vec.crossVectors(tangents[0], normal).normalize();
+			normals[0].crossVectors(tangents[0], vec);
+			binormals[0].crossVectors(tangents[0], normals[0]); // compute the slowly-varying normal and binormal vectors for each segment on the curve
+
+			for (var _i = 1; _i <= segments; _i++) {
+				normals[_i] = normals[_i - 1].clone();
+				binormals[_i] = binormals[_i - 1].clone();
+				vec.crossVectors(tangents[_i - 1], tangents[_i]);
+
+				if (vec.length() > Number.EPSILON) {
+					vec.normalize();
+					var theta = Math.acos(MathUtils.clamp(tangents[_i - 1].dot(tangents[_i]), -1, 1)); // clamp for floating pt errors
+
+					normals[_i].applyMatrix4(mat.makeRotationAxis(vec, theta));
+				}
+
+				binormals[_i].crossVectors(tangents[_i], normals[_i]);
+			} // if the curve is closed, postprocess the vectors so the first and last normal vectors are the same
+
+
+			if (closed === true) {
+				var _theta = Math.acos(MathUtils.clamp(normals[0].dot(normals[segments]), -1, 1));
+
+				_theta /= segments;
+
+				if (tangents[0].dot(vec.crossVectors(normals[0], normals[segments])) > 0) {
+					_theta = -_theta;
+				}
+
+				for (var _i2 = 1; _i2 <= segments; _i2++) {
+					// twist a little...
+					normals[_i2].applyMatrix4(mat.makeRotationAxis(tangents[_i2], _theta * _i2));
+
+					binormals[_i2].crossVectors(tangents[_i2], normals[_i2]);
+				}
+			}
+
+			return {
+				tangents: tangents,
+				normals: normals,
+				binormals: binormals
+			};
+		},
+		clone: function clone() {
+			return new this.constructor().copy(this);
+		},
+		copy: function copy(source) {
+			this.arcLengthDivisions = source.arcLengthDivisions;
+			return this;
+		},
+		toJSON: function toJSON() {
+			var data = {
+				metadata: {
+					version: 4.5,
+					type: 'Curve',
+					generator: 'Curve.toJSON'
+				}
+			};
+			data.arcLengthDivisions = this.arcLengthDivisions;
+			data.type = this.type;
+			return data;
+		},
+		fromJSON: function fromJSON(json) {
+			this.arcLengthDivisions = json.arcLengthDivisions;
+			return this;
+		}
+	});
+
+	function EllipseCurve(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
+		Curve.call(this);
+		this.type = 'EllipseCurve';
+		this.aX = aX || 0;
+		this.aY = aY || 0;
+		this.xRadius = xRadius || 1;
+		this.yRadius = yRadius || 1;
+		this.aStartAngle = aStartAngle || 0;
+		this.aEndAngle = aEndAngle || 2 * Math.PI;
+		this.aClockwise = aClockwise || false;
+		this.aRotation = aRotation || 0;
+	}
+
+	EllipseCurve.prototype = Object.create(Curve.prototype);
+	EllipseCurve.prototype.constructor = EllipseCurve;
+	EllipseCurve.prototype.isEllipseCurve = true;
+
+	EllipseCurve.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector2();
+		var twoPi = Math.PI * 2;
+		var deltaAngle = this.aEndAngle - this.aStartAngle;
+		var samePoints = Math.abs(deltaAngle) < Number.EPSILON; // ensures that deltaAngle is 0 .. 2 PI
+
+		while (deltaAngle < 0) {
+			deltaAngle += twoPi;
+		}
+
+		while (deltaAngle > twoPi) {
+			deltaAngle -= twoPi;
+		}
+
+		if (deltaAngle < Number.EPSILON) {
+			if (samePoints) {
+				deltaAngle = 0;
+			} else {
+				deltaAngle = twoPi;
+			}
+		}
+
+		if (this.aClockwise === true && !samePoints) {
+			if (deltaAngle === twoPi) {
+				deltaAngle = -twoPi;
+			} else {
+				deltaAngle = deltaAngle - twoPi;
+			}
+		}
+
+		var angle = this.aStartAngle + t * deltaAngle;
+		var x = this.aX + this.xRadius * Math.cos(angle);
+		var y = this.aY + this.yRadius * Math.sin(angle);
+
+		if (this.aRotation !== 0) {
+			var cos = Math.cos(this.aRotation);
+			var sin = Math.sin(this.aRotation);
+			var tx = x - this.aX;
+			var ty = y - this.aY; // Rotate the point about the center of the ellipse.
+
+			x = tx * cos - ty * sin + this.aX;
+			y = tx * sin + ty * cos + this.aY;
+		}
+
+		return point.set(x, y);
+	};
+
+	EllipseCurve.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.aX = source.aX;
+		this.aY = source.aY;
+		this.xRadius = source.xRadius;
+		this.yRadius = source.yRadius;
+		this.aStartAngle = source.aStartAngle;
+		this.aEndAngle = source.aEndAngle;
+		this.aClockwise = source.aClockwise;
+		this.aRotation = source.aRotation;
+		return this;
+	};
+
+	EllipseCurve.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.aX = this.aX;
+		data.aY = this.aY;
+		data.xRadius = this.xRadius;
+		data.yRadius = this.yRadius;
+		data.aStartAngle = this.aStartAngle;
+		data.aEndAngle = this.aEndAngle;
+		data.aClockwise = this.aClockwise;
+		data.aRotation = this.aRotation;
+		return data;
+	};
+
+	EllipseCurve.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.aX = json.aX;
+		this.aY = json.aY;
+		this.xRadius = json.xRadius;
+		this.yRadius = json.yRadius;
+		this.aStartAngle = json.aStartAngle;
+		this.aEndAngle = json.aEndAngle;
+		this.aClockwise = json.aClockwise;
+		this.aRotation = json.aRotation;
+		return this;
+	};
+
+	function ArcCurve(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
+		EllipseCurve.call(this, aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise);
+		this.type = 'ArcCurve';
+	}
+
+	ArcCurve.prototype = Object.create(EllipseCurve.prototype);
+	ArcCurve.prototype.constructor = ArcCurve;
+	ArcCurve.prototype.isArcCurve = true;
+
+	/**
+	 * Centripetal CatmullRom Curve - which is useful for avoiding
+	 * cusps and self-intersections in non-uniform catmull rom curves.
+	 * http://www.cemyuksel.com/research/catmullrom_param/catmullrom.pdf
+	 *
+	 * curve.type accepts centripetal(default), chordal and catmullrom
+	 * curve.tension is used for catmullrom which defaults to 0.5
+	 */
+
+	/*
+	Based on an optimized c++ solution in
+	 - http://stackoverflow.com/questions/9489736/catmull-rom-curve-with-no-cusps-and-no-self-intersections/
+	 - http://ideone.com/NoEbVM
+
+	This CubicPoly class could be used for reusing some variables and calculations,
+	but for three.js curve use, it could be possible inlined and flatten into a single function call
+	which can be placed in CurveUtils.
+	*/
+
+	function CubicPoly() {
+		var c0 = 0,
+				c1 = 0,
+				c2 = 0,
+				c3 = 0;
+		/*
+		 * Compute coefficients for a cubic polynomial
+		 *	 p(s) = c0 + c1*s + c2*s^2 + c3*s^3
+		 * such that
+		 *	 p(0) = x0, p(1) = x1
+		 *	and
+		 *	 p'(0) = t0, p'(1) = t1.
+		 */
+
+		function init(x0, x1, t0, t1) {
+			c0 = x0;
+			c1 = t0;
+			c2 = -3 * x0 + 3 * x1 - 2 * t0 - t1;
+			c3 = 2 * x0 - 2 * x1 + t0 + t1;
+		}
+
+		return {
+			initCatmullRom: function initCatmullRom(x0, x1, x2, x3, tension) {
+				init(x1, x2, tension * (x2 - x0), tension * (x3 - x1));
+			},
+			initNonuniformCatmullRom: function initNonuniformCatmullRom(x0, x1, x2, x3, dt0, dt1, dt2) {
+				// compute tangents when parameterized in [t1,t2]
+				var t1 = (x1 - x0) / dt0 - (x2 - x0) / (dt0 + dt1) + (x2 - x1) / dt1;
+				var t2 = (x2 - x1) / dt1 - (x3 - x1) / (dt1 + dt2) + (x3 - x2) / dt2; // rescale tangents for parametrization in [0,1]
+
+				t1 *= dt1;
+				t2 *= dt1;
+				init(x1, x2, t1, t2);
+			},
+			calc: function calc(t) {
+				var t2 = t * t;
+				var t3 = t2 * t;
+				return c0 + c1 * t + c2 * t2 + c3 * t3;
+			}
+		};
+	} //
+
+
+	var tmp = new Vector3();
+	var px = new CubicPoly(),
+			py = new CubicPoly(),
+			pz = new CubicPoly();
+
+	function CatmullRomCurve3(points, closed, curveType, tension) {
+		Curve.call(this);
+		this.type = 'CatmullRomCurve3';
+		this.points = points || [];
+		this.closed = closed || false;
+		this.curveType = curveType || 'centripetal';
+		this.tension = tension !== undefined ? tension : 0.5;
+	}
+
+	CatmullRomCurve3.prototype = Object.create(Curve.prototype);
+	CatmullRomCurve3.prototype.constructor = CatmullRomCurve3;
+	CatmullRomCurve3.prototype.isCatmullRomCurve3 = true;
+
+	CatmullRomCurve3.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector3();
+		var points = this.points;
+		var l = points.length;
+		var p = (l - (this.closed ? 0 : 1)) * t;
+		var intPoint = Math.floor(p);
+		var weight = p - intPoint;
+
+		if (this.closed) {
+			intPoint += intPoint > 0 ? 0 : (Math.floor(Math.abs(intPoint) / l) + 1) * l;
+		} else if (weight === 0 && intPoint === l - 1) {
+			intPoint = l - 2;
+			weight = 1;
+		}
+
+		var p0, p3; // 4 points (p1 & p2 defined below)
+
+		if (this.closed || intPoint > 0) {
+			p0 = points[(intPoint - 1) % l];
+		} else {
+			// extrapolate first point
+			tmp.subVectors(points[0], points[1]).add(points[0]);
+			p0 = tmp;
+		}
+
+		var p1 = points[intPoint % l];
+		var p2 = points[(intPoint + 1) % l];
+
+		if (this.closed || intPoint + 2 < l) {
+			p3 = points[(intPoint + 2) % l];
+		} else {
+			// extrapolate last point
+			tmp.subVectors(points[l - 1], points[l - 2]).add(points[l - 1]);
+			p3 = tmp;
+		}
+
+		if (this.curveType === 'centripetal' || this.curveType === 'chordal') {
+			// init Centripetal / Chordal Catmull-Rom
+			var pow = this.curveType === 'chordal' ? 0.5 : 0.25;
+			var dt0 = Math.pow(p0.distanceToSquared(p1), pow);
+			var dt1 = Math.pow(p1.distanceToSquared(p2), pow);
+			var dt2 = Math.pow(p2.distanceToSquared(p3), pow); // safety check for repeated points
+
+			if (dt1 < 1e-4) dt1 = 1.0;
+			if (dt0 < 1e-4) dt0 = dt1;
+			if (dt2 < 1e-4) dt2 = dt1;
+			px.initNonuniformCatmullRom(p0.x, p1.x, p2.x, p3.x, dt0, dt1, dt2);
+			py.initNonuniformCatmullRom(p0.y, p1.y, p2.y, p3.y, dt0, dt1, dt2);
+			pz.initNonuniformCatmullRom(p0.z, p1.z, p2.z, p3.z, dt0, dt1, dt2);
+		} else if (this.curveType === 'catmullrom') {
+			px.initCatmullRom(p0.x, p1.x, p2.x, p3.x, this.tension);
+			py.initCatmullRom(p0.y, p1.y, p2.y, p3.y, this.tension);
+			pz.initCatmullRom(p0.z, p1.z, p2.z, p3.z, this.tension);
+		}
+
+		point.set(px.calc(weight), py.calc(weight), pz.calc(weight));
+		return point;
+	};
+
+	CatmullRomCurve3.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.points = [];
+
+		for (var i = 0, l = source.points.length; i < l; i++) {
+			var point = source.points[i];
+			this.points.push(point.clone());
+		}
+
+		this.closed = source.closed;
+		this.curveType = source.curveType;
+		this.tension = source.tension;
+		return this;
+	};
+
+	CatmullRomCurve3.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.points = [];
+
+		for (var i = 0, l = this.points.length; i < l; i++) {
+			var point = this.points[i];
+			data.points.push(point.toArray());
+		}
+
+		data.closed = this.closed;
+		data.curveType = this.curveType;
+		data.tension = this.tension;
+		return data;
+	};
+
+	CatmullRomCurve3.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.points = [];
+
+		for (var i = 0, l = json.points.length; i < l; i++) {
+			var point = json.points[i];
+			this.points.push(new Vector3().fromArray(point));
+		}
+
+		this.closed = json.closed;
+		this.curveType = json.curveType;
+		this.tension = json.tension;
+		return this;
+	};
+
+	/**
+	 * Bezier Curves formulas obtained from
+	 * http://en.wikipedia.org/wiki/Bézier_curve
+	 */
+	function CatmullRom(t, p0, p1, p2, p3) {
+		var v0 = (p2 - p0) * 0.5;
+		var v1 = (p3 - p1) * 0.5;
+		var t2 = t * t;
+		var t3 = t * t2;
+		return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1;
+	} //
+
+
+	function QuadraticBezierP0(t, p) {
+		var k = 1 - t;
+		return k * k * p;
+	}
+
+	function QuadraticBezierP1(t, p) {
+		return 2 * (1 - t) * t * p;
+	}
+
+	function QuadraticBezierP2(t, p) {
+		return t * t * p;
+	}
+
+	function QuadraticBezier(t, p0, p1, p2) {
+		return QuadraticBezierP0(t, p0) + QuadraticBezierP1(t, p1) + QuadraticBezierP2(t, p2);
+	} //
+
+
+	function CubicBezierP0(t, p) {
+		var k = 1 - t;
+		return k * k * k * p;
+	}
+
+	function CubicBezierP1(t, p) {
+		var k = 1 - t;
+		return 3 * k * k * t * p;
+	}
+
+	function CubicBezierP2(t, p) {
+		return 3 * (1 - t) * t * t * p;
+	}
+
+	function CubicBezierP3(t, p) {
+		return t * t * t * p;
+	}
+
+	function CubicBezier(t, p0, p1, p2, p3) {
+		return CubicBezierP0(t, p0) + CubicBezierP1(t, p1) + CubicBezierP2(t, p2) + CubicBezierP3(t, p3);
+	}
+
+	function CubicBezierCurve(v0, v1, v2, v3) {
+		Curve.call(this);
+		this.type = 'CubicBezierCurve';
+		this.v0 = v0 || new Vector2();
+		this.v1 = v1 || new Vector2();
+		this.v2 = v2 || new Vector2();
+		this.v3 = v3 || new Vector2();
+	}
+
+	CubicBezierCurve.prototype = Object.create(Curve.prototype);
+	CubicBezierCurve.prototype.constructor = CubicBezierCurve;
+	CubicBezierCurve.prototype.isCubicBezierCurve = true;
+
+	CubicBezierCurve.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector2();
+		var v0 = this.v0,
+				v1 = this.v1,
+				v2 = this.v2,
+				v3 = this.v3;
+		point.set(CubicBezier(t, v0.x, v1.x, v2.x, v3.x), CubicBezier(t, v0.y, v1.y, v2.y, v3.y));
+		return point;
+	};
+
+	CubicBezierCurve.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v0.copy(source.v0);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		this.v3.copy(source.v3);
+		return this;
+	};
+
+	CubicBezierCurve.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v0 = this.v0.toArray();
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		data.v3 = this.v3.toArray();
+		return data;
+	};
+
+	CubicBezierCurve.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v0.fromArray(json.v0);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		this.v3.fromArray(json.v3);
+		return this;
+	};
+
+	function CubicBezierCurve3(v0, v1, v2, v3) {
+		Curve.call(this);
+		this.type = 'CubicBezierCurve3';
+		this.v0 = v0 || new Vector3();
+		this.v1 = v1 || new Vector3();
+		this.v2 = v2 || new Vector3();
+		this.v3 = v3 || new Vector3();
+	}
+
+	CubicBezierCurve3.prototype = Object.create(Curve.prototype);
+	CubicBezierCurve3.prototype.constructor = CubicBezierCurve3;
+	CubicBezierCurve3.prototype.isCubicBezierCurve3 = true;
+
+	CubicBezierCurve3.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector3();
+		var v0 = this.v0,
+				v1 = this.v1,
+				v2 = this.v2,
+				v3 = this.v3;
+		point.set(CubicBezier(t, v0.x, v1.x, v2.x, v3.x), CubicBezier(t, v0.y, v1.y, v2.y, v3.y), CubicBezier(t, v0.z, v1.z, v2.z, v3.z));
+		return point;
+	};
+
+	CubicBezierCurve3.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v0.copy(source.v0);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		this.v3.copy(source.v3);
+		return this;
+	};
+
+	CubicBezierCurve3.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v0 = this.v0.toArray();
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		data.v3 = this.v3.toArray();
+		return data;
+	};
+
+	CubicBezierCurve3.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v0.fromArray(json.v0);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		this.v3.fromArray(json.v3);
+		return this;
+	};
+
+	function LineCurve(v1, v2) {
+		Curve.call(this);
+		this.type = 'LineCurve';
+		this.v1 = v1 || new Vector2();
+		this.v2 = v2 || new Vector2();
+	}
+
+	LineCurve.prototype = Object.create(Curve.prototype);
+	LineCurve.prototype.constructor = LineCurve;
+	LineCurve.prototype.isLineCurve = true;
+
+	LineCurve.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector2();
+
+		if (t === 1) {
+			point.copy(this.v2);
+		} else {
+			point.copy(this.v2).sub(this.v1);
+			point.multiplyScalar(t).add(this.v1);
+		}
+
+		return point;
+	}; // Line curve is linear, so we can overwrite default getPointAt
+
+
+	LineCurve.prototype.getPointAt = function (u, optionalTarget) {
+		return this.getPoint(u, optionalTarget);
+	};
+
+	LineCurve.prototype.getTangent = function (t, optionalTarget) {
+		var tangent = optionalTarget || new Vector2();
+		tangent.copy(this.v2).sub(this.v1).normalize();
+		return tangent;
+	};
+
+	LineCurve.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		return this;
+	};
+
+	LineCurve.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		return data;
+	};
+
+	LineCurve.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		return this;
+	};
+
+	function LineCurve3(v1, v2) {
+		Curve.call(this);
+		this.type = 'LineCurve3';
+		this.v1 = v1 || new Vector3();
+		this.v2 = v2 || new Vector3();
+	}
+
+	LineCurve3.prototype = Object.create(Curve.prototype);
+	LineCurve3.prototype.constructor = LineCurve3;
+	LineCurve3.prototype.isLineCurve3 = true;
+
+	LineCurve3.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector3();
+
+		if (t === 1) {
+			point.copy(this.v2);
+		} else {
+			point.copy(this.v2).sub(this.v1);
+			point.multiplyScalar(t).add(this.v1);
+		}
+
+		return point;
+	}; // Line curve is linear, so we can overwrite default getPointAt
+
+
+	LineCurve3.prototype.getPointAt = function (u, optionalTarget) {
+		return this.getPoint(u, optionalTarget);
+	};
+
+	LineCurve3.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		return this;
+	};
+
+	LineCurve3.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		return data;
+	};
+
+	LineCurve3.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		return this;
+	};
+
+	function QuadraticBezierCurve(v0, v1, v2) {
+		Curve.call(this);
+		this.type = 'QuadraticBezierCurve';
+		this.v0 = v0 || new Vector2();
+		this.v1 = v1 || new Vector2();
+		this.v2 = v2 || new Vector2();
+	}
+
+	QuadraticBezierCurve.prototype = Object.create(Curve.prototype);
+	QuadraticBezierCurve.prototype.constructor = QuadraticBezierCurve;
+	QuadraticBezierCurve.prototype.isQuadraticBezierCurve = true;
+
+	QuadraticBezierCurve.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector2();
+		var v0 = this.v0,
+				v1 = this.v1,
+				v2 = this.v2;
+		point.set(QuadraticBezier(t, v0.x, v1.x, v2.x), QuadraticBezier(t, v0.y, v1.y, v2.y));
+		return point;
+	};
+
+	QuadraticBezierCurve.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v0.copy(source.v0);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		return this;
+	};
+
+	QuadraticBezierCurve.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v0 = this.v0.toArray();
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		return data;
+	};
+
+	QuadraticBezierCurve.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v0.fromArray(json.v0);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		return this;
+	};
+
+	function QuadraticBezierCurve3(v0, v1, v2) {
+		Curve.call(this);
+		this.type = 'QuadraticBezierCurve3';
+		this.v0 = v0 || new Vector3();
+		this.v1 = v1 || new Vector3();
+		this.v2 = v2 || new Vector3();
+	}
+
+	QuadraticBezierCurve3.prototype = Object.create(Curve.prototype);
+	QuadraticBezierCurve3.prototype.constructor = QuadraticBezierCurve3;
+	QuadraticBezierCurve3.prototype.isQuadraticBezierCurve3 = true;
+
+	QuadraticBezierCurve3.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector3();
+		var v0 = this.v0,
+				v1 = this.v1,
+				v2 = this.v2;
+		point.set(QuadraticBezier(t, v0.x, v1.x, v2.x), QuadraticBezier(t, v0.y, v1.y, v2.y), QuadraticBezier(t, v0.z, v1.z, v2.z));
+		return point;
+	};
+
+	QuadraticBezierCurve3.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.v0.copy(source.v0);
+		this.v1.copy(source.v1);
+		this.v2.copy(source.v2);
+		return this;
+	};
+
+	QuadraticBezierCurve3.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.v0 = this.v0.toArray();
+		data.v1 = this.v1.toArray();
+		data.v2 = this.v2.toArray();
+		return data;
+	};
+
+	QuadraticBezierCurve3.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.v0.fromArray(json.v0);
+		this.v1.fromArray(json.v1);
+		this.v2.fromArray(json.v2);
+		return this;
+	};
+
+	function SplineCurve(points) {
+		Curve.call(this);
+		this.type = 'SplineCurve';
+		this.points = points || [];
+	}
+
+	SplineCurve.prototype = Object.create(Curve.prototype);
+	SplineCurve.prototype.constructor = SplineCurve;
+	SplineCurve.prototype.isSplineCurve = true;
+
+	SplineCurve.prototype.getPoint = function (t, optionalTarget) {
+		var point = optionalTarget || new Vector2();
+		var points = this.points;
+		var p = (points.length - 1) * t;
+		var intPoint = Math.floor(p);
+		var weight = p - intPoint;
+		var p0 = points[intPoint === 0 ? intPoint : intPoint - 1];
+		var p1 = points[intPoint];
+		var p2 = points[intPoint > points.length - 2 ? points.length - 1 : intPoint + 1];
+		var p3 = points[intPoint > points.length - 3 ? points.length - 1 : intPoint + 2];
+		point.set(CatmullRom(weight, p0.x, p1.x, p2.x, p3.x), CatmullRom(weight, p0.y, p1.y, p2.y, p3.y));
+		return point;
+	};
+
+	SplineCurve.prototype.copy = function (source) {
+		Curve.prototype.copy.call(this, source);
+		this.points = [];
+
+		for (var i = 0, l = source.points.length; i < l; i++) {
+			var point = source.points[i];
+			this.points.push(point.clone());
+		}
+
+		return this;
+	};
+
+	SplineCurve.prototype.toJSON = function () {
+		var data = Curve.prototype.toJSON.call(this);
+		data.points = [];
+
+		for (var i = 0, l = this.points.length; i < l; i++) {
+			var point = this.points[i];
+			data.points.push(point.toArray());
+		}
+
+		return data;
+	};
+
+	SplineCurve.prototype.fromJSON = function (json) {
+		Curve.prototype.fromJSON.call(this, json);
+		this.points = [];
+
+		for (var i = 0, l = json.points.length; i < l; i++) {
+			var point = json.points[i];
+			this.points.push(new Vector2().fromArray(point));
+		}
+
+		return this;
+	};
+
+	var Curves = /*#__PURE__*/Object.freeze({
+		__proto__: null,
+		ArcCurve: ArcCurve,
+		CatmullRomCurve3: CatmullRomCurve3,
+		CubicBezierCurve: CubicBezierCurve,
+		CubicBezierCurve3: CubicBezierCurve3,
+		EllipseCurve: EllipseCurve,
+		LineCurve: LineCurve,
+		LineCurve3: LineCurve3,
+		QuadraticBezierCurve: QuadraticBezierCurve,
+		QuadraticBezierCurve3: QuadraticBezierCurve3,
+		SplineCurve: SplineCurve
+	});
+
+	/**************************************************************
+	 *	Curved Path - a curve path is simply a array of connected
+	 *	curves, but retains the api of a curve
+	 **************************************************************/
+
+	function CurvePath() {
+		Curve.call(this);
+		this.type = 'CurvePath';
+		this.curves = [];
+		this.autoClose = false; // Automatically closes the path
+	}
+
+	CurvePath.prototype = Object.assign(Object.create(Curve.prototype), {
+		constructor: CurvePath,
+		add: function add(curve) {
+			this.curves.push(curve);
+		},
+		closePath: function closePath() {
+			// Add a line curve if start and end of lines are not connected
+			var startPoint = this.curves[0].getPoint(0);
+			var endPoint = this.curves[this.curves.length - 1].getPoint(1);
+
+			if (!startPoint.equals(endPoint)) {
+				this.curves.push(new LineCurve(endPoint, startPoint));
+			}
+		},
+		// To get accurate point with reference to
+		// entire path distance at time t,
+		// following has to be done:
+		// 1. Length of each sub path have to be known
+		// 2. Locate and identify type of curve
+		// 3. Get t for the curve
+		// 4. Return curve.getPointAt(t')
+		getPoint: function getPoint(t) {
+			var d = t * this.getLength();
+			var curveLengths = this.getCurveLengths();
+			var i = 0; // To think about boundaries points.
+
+			while (i < curveLengths.length) {
+				if (curveLengths[i] >= d) {
+					var diff = curveLengths[i] - d;
+					var curve = this.curves[i];
+					var segmentLength = curve.getLength();
+					var u = segmentLength === 0 ? 0 : 1 - diff / segmentLength;
+					return curve.getPointAt(u);
+				}
+
+				i++;
+			}
+
+			return null; // loop where sum != 0, sum > d , sum+1 <d
+		},
+		// We cannot use the default THREE.Curve getPoint() with getLength() because in
+		// THREE.Curve, getLength() depends on getPoint() but in THREE.CurvePath
+		// getPoint() depends on getLength
+		getLength: function getLength() {
+			var lens = this.getCurveLengths();
+			return lens[lens.length - 1];
+		},
+		// cacheLengths must be recalculated.
+		updateArcLengths: function updateArcLengths() {
+			this.needsUpdate = true;
+			this.cacheLengths = null;
+			this.getCurveLengths();
+		},
+		// Compute lengths and cache them
+		// We cannot overwrite getLengths() because UtoT mapping uses it.
+		getCurveLengths: function getCurveLengths() {
+			// We use cache values if curves and cache array are same length
+			if (this.cacheLengths && this.cacheLengths.length === this.curves.length) {
+				return this.cacheLengths;
+			} // Get length of sub-curve
+			// Push sums into cached array
+
+
+			var lengths = [];
+			var sums = 0;
+
+			for (var i = 0, l = this.curves.length; i < l; i++) {
+				sums += this.curves[i].getLength();
+				lengths.push(sums);
+			}
+
+			this.cacheLengths = lengths;
+			return lengths;
+		},
+		getSpacedPoints: function getSpacedPoints(divisions) {
+			if (divisions === undefined) divisions = 40;
+			var points = [];
+
+			for (var i = 0; i <= divisions; i++) {
+				points.push(this.getPoint(i / divisions));
+			}
+
+			if (this.autoClose) {
+				points.push(points[0]);
+			}
+
+			return points;
+		},
+		getPoints: function getPoints(divisions) {
+			divisions = divisions || 12;
+			var points = [];
+			var last;
+
+			for (var i = 0, curves = this.curves; i < curves.length; i++) {
+				var curve = curves[i];
+				var resolution = curve && curve.isEllipseCurve ? divisions * 2 : curve && (curve.isLineCurve || curve.isLineCurve3) ? 1 : curve && curve.isSplineCurve ? divisions * curve.points.length : divisions;
+				var pts = curve.getPoints(resolution);
+
+				for (var j = 0; j < pts.length; j++) {
+					var point = pts[j];
+					if (last && last.equals(point)) continue; // ensures no consecutive points are duplicates
+
+					points.push(point);
+					last = point;
+				}
+			}
+
+			if (this.autoClose && points.length > 1 && !points[points.length - 1].equals(points[0])) {
+				points.push(points[0]);
+			}
+
+			return points;
+		},
+		copy: function copy(source) {
+			Curve.prototype.copy.call(this, source);
+			this.curves = [];
+
+			for (var i = 0, l = source.curves.length; i < l; i++) {
+				var curve = source.curves[i];
+				this.curves.push(curve.clone());
+			}
+
+			this.autoClose = source.autoClose;
+			return this;
+		},
+		toJSON: function toJSON() {
+			var data = Curve.prototype.toJSON.call(this);
+			data.autoClose = this.autoClose;
+			data.curves = [];
+
+			for (var i = 0, l = this.curves.length; i < l; i++) {
+				var curve = this.curves[i];
+				data.curves.push(curve.toJSON());
+			}
+
+			return data;
+		},
+		fromJSON: function fromJSON(json) {
+			Curve.prototype.fromJSON.call(this, json);
+			this.autoClose = json.autoClose;
+			this.curves = [];
+
+			for (var i = 0, l = json.curves.length; i < l; i++) {
+				var curve = json.curves[i];
+				this.curves.push(new Curves[curve.type]().fromJSON(curve));
+			}
+
+			return this;
+		}
+	});
+
+	function Path(points) {
+		CurvePath.call(this);
+		this.type = 'Path';
+		this.currentPoint = new Vector2();
+
+		if (points) {
+			this.setFromPoints(points);
+		}
+	}
+
+	Path.prototype = Object.assign(Object.create(CurvePath.prototype), {
+		constructor: Path,
+		setFromPoints: function setFromPoints(points) {
+			this.moveTo(points[0].x, points[0].y);
+
+			for (var i = 1, l = points.length; i < l; i++) {
+				this.lineTo(points[i].x, points[i].y);
+			}
+
+			return this;
+		},
+		moveTo: function moveTo(x, y) {
+			this.currentPoint.set(x, y); // TODO consider referencing vectors instead of copying?
+
+			return this;
+		},
+		lineTo: function lineTo(x, y) {
+			var curve = new LineCurve(this.currentPoint.clone(), new Vector2(x, y));
+			this.curves.push(curve);
+			this.currentPoint.set(x, y);
+			return this;
+		},
+		quadraticCurveTo: function quadraticCurveTo(aCPx, aCPy, aX, aY) {
+			var curve = new QuadraticBezierCurve(this.currentPoint.clone(), new Vector2(aCPx, aCPy), new Vector2(aX, aY));
+			this.curves.push(curve);
+			this.currentPoint.set(aX, aY);
+			return this;
+		},
+		bezierCurveTo: function bezierCurveTo(aCP1x, aCP1y, aCP2x, aCP2y, aX, aY) {
+			var curve = new CubicBezierCurve(this.currentPoint.clone(), new Vector2(aCP1x, aCP1y), new Vector2(aCP2x, aCP2y), new Vector2(aX, aY));
+			this.curves.push(curve);
+			this.currentPoint.set(aX, aY);
+			return this;
+		},
+		splineThru: function splineThru(pts
+		/*Array of Vector*/
+		) {
+			var npts = [this.currentPoint.clone()].concat(pts);
+			var curve = new SplineCurve(npts);
+			this.curves.push(curve);
+			this.currentPoint.copy(pts[pts.length - 1]);
+			return this;
+		},
+		arc: function arc(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
+			var x0 = this.currentPoint.x;
+			var y0 = this.currentPoint.y;
+			this.absarc(aX + x0, aY + y0, aRadius, aStartAngle, aEndAngle, aClockwise);
+			return this;
+		},
+		absarc: function absarc(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
+			this.absellipse(aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise);
+			return this;
+		},
+		ellipse: function ellipse(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
+			var x0 = this.currentPoint.x;
+			var y0 = this.currentPoint.y;
+			this.absellipse(aX + x0, aY + y0, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation);
+			return this;
+		},
+		absellipse: function absellipse(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
+			var curve = new EllipseCurve(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation);
+
+			if (this.curves.length > 0) {
+				// if a previous curve is present, attempt to join
+				var firstPoint = curve.getPoint(0);
+
+				if (!firstPoint.equals(this.currentPoint)) {
+					this.lineTo(firstPoint.x, firstPoint.y);
+				}
+			}
+
+			this.curves.push(curve);
+			var lastPoint = curve.getPoint(1);
+			this.currentPoint.copy(lastPoint);
+			return this;
+		},
+		copy: function copy(source) {
+			CurvePath.prototype.copy.call(this, source);
+			this.currentPoint.copy(source.currentPoint);
+			return this;
+		},
+		toJSON: function toJSON() {
+			var data = CurvePath.prototype.toJSON.call(this);
+			data.currentPoint = this.currentPoint.toArray();
+			return data;
+		},
+		fromJSON: function fromJSON(json) {
+			CurvePath.prototype.fromJSON.call(this, json);
+			this.currentPoint.fromArray(json.currentPoint);
+			return this;
+		}
+	});
+
+	function Shape(points) {
+		Path.call(this, points);
+		this.uuid = MathUtils.generateUUID();
+		this.type = 'Shape';
+		this.holes = [];
+	}
+
+	Shape.prototype = Object.assign(Object.create(Path.prototype), {
+		constructor: Shape,
+		getPointsHoles: function getPointsHoles(divisions) {
+			var holesPts = [];
+
+			for (var i = 0, l = this.holes.length; i < l; i++) {
+				holesPts[i] = this.holes[i].getPoints(divisions);
+			}
+
+			return holesPts;
+		},
+		// get points of shape and holes (keypoints based on segments parameter)
+		extractPoints: function extractPoints(divisions) {
+			return {
+				shape: this.getPoints(divisions),
+				holes: this.getPointsHoles(divisions)
+			};
+		},
+		copy: function copy(source) {
+			Path.prototype.copy.call(this, source);
+			this.holes = [];
+
+			for (var i = 0, l = source.holes.length; i < l; i++) {
+				var hole = source.holes[i];
+				this.holes.push(hole.clone());
+			}
+
+			return this;
+		},
+		toJSON: function toJSON() {
+			var data = Path.prototype.toJSON.call(this);
+			data.uuid = this.uuid;
+			data.holes = [];
+
+			for (var i = 0, l = this.holes.length; i < l; i++) {
+				var hole = this.holes[i];
+				data.holes.push(hole.toJSON());
+			}
+
+			return data;
+		},
+		fromJSON: function fromJSON(json) {
+			Path.prototype.fromJSON.call(this, json);
+			this.uuid = json.uuid;
+			this.holes = [];
+
+			for (var i = 0, l = json.holes.length; i < l; i++) {
+				var hole = json.holes[i];
+				this.holes.push(new Path().fromJSON(hole));
+			}
+
+			return this;
+		}
+	});
+
+	var _geometryId = 0; // Geometry uses even numbers as Id
+
+	var _m1$3 = new Matrix4();
+
+	var _obj$1 = new Object3D();
+
+	var _offset$1 = new Vector3();
+
+	function Geometry() {
+		Object.defineProperty(this, 'id', {
+			value: _geometryId += 2
+		});
+		this.uuid = MathUtils.generateUUID();
+		this.name = '';
+		this.type = 'Geometry';
+		this.vertices = [];
+		this.colors = [];
+		this.faces = [];
+		this.faceVertexUvs = [[]];
+		this.morphTargets = [];
+		this.morphNormals = [];
+		this.skinWeights = [];
+		this.skinIndices = [];
+		this.lineDistances = [];
+		this.boundingBox = null;
+		this.boundingSphere = null; // update flags
+
+		this.elementsNeedUpdate = false;
+		this.verticesNeedUpdate = false;
+		this.uvsNeedUpdate = false;
+		this.normalsNeedUpdate = false;
+		this.colorsNeedUpdate = false;
+		this.lineDistancesNeedUpdate = false;
+		this.groupsNeedUpdate = false;
+	}
+
+	Geometry.prototype = Object.assign(Object.create(EventDispatcher.prototype), {
+		constructor: Geometry,
+		isGeometry: true,
+		applyMatrix4: function applyMatrix4(matrix) {
+			var normalMatrix = new Matrix3().getNormalMatrix(matrix);
+
+			for (var i = 0, il = this.vertices.length; i < il; i++) {
+				var vertex = this.vertices[i];
+				vertex.applyMatrix4(matrix);
+			}
+
+			for (var _i = 0, _il = this.faces.length; _i < _il; _i++) {
+				var face = this.faces[_i];
+				face.normal.applyMatrix3(normalMatrix).normalize();
+
+				for (var j = 0, jl = face.vertexNormals.length; j < jl; j++) {
+					face.vertexNormals[j].applyMatrix3(normalMatrix).normalize();
+				}
+			}
+
+			if (this.boundingBox !== null) {
+				this.computeBoundingBox();
+			}
+
+			if (this.boundingSphere !== null) {
+				this.computeBoundingSphere();
+			}
+
+			this.verticesNeedUpdate = true;
+			this.normalsNeedUpdate = true;
+			return this;
+		},
+		rotateX: function rotateX(angle) {
+			// rotate geometry around world x-axis
+			_m1$3.makeRotationX(angle);
+
+			this.applyMatrix4(_m1$3);
+			return this;
+		},
+		rotateY: function rotateY(angle) {
+			// rotate geometry around world y-axis
+			_m1$3.makeRotationY(angle);
+
+			this.applyMatrix4(_m1$3);
+			return this;
+		},
+		rotateZ: function rotateZ(angle) {
+			// rotate geometry around world z-axis
+			_m1$3.makeRotationZ(angle);
+
+			this.applyMatrix4(_m1$3);
+			return this;
+		},
+		translate: function translate(x, y, z) {
+			// translate geometry
+			_m1$3.makeTranslation(x, y, z);
+
+			this.applyMatrix4(_m1$3);
+			return this;
+		},
+		scale: function scale(x, y, z) {
+			// scale geometry
+			_m1$3.makeScale(x, y, z);
+
+			this.applyMatrix4(_m1$3);
+			return this;
+		},
+		lookAt: function lookAt(vector) {
+			_obj$1.lookAt(vector);
+
+			_obj$1.updateMatrix();
+
+			this.applyMatrix4(_obj$1.matrix);
+			return this;
+		},
+		fromBufferGeometry: function fromBufferGeometry(geometry) {
+			var scope = this;
+			var index = geometry.index !== null ? geometry.index : undefined;
+			var attributes = geometry.attributes;
+
+			if (attributes.position === undefined) {
+				console.error('THREE.Geometry.fromBufferGeometry(): Position attribute required for conversion.');
+				return this;
+			}
+
+			var position = attributes.position;
+			var normal = attributes.normal;
+			var color = attributes.color;
+			var uv = attributes.uv;
+			var uv2 = attributes.uv2;
+			if (uv2 !== undefined) this.faceVertexUvs[1] = [];
+
+			for (var i = 0; i < position.count; i++) {
+				scope.vertices.push(new Vector3().fromBufferAttribute(position, i));
+
+				if (color !== undefined) {
+					scope.colors.push(new Color().fromBufferAttribute(color, i));
+				}
+			}
+
+			function addFace(a, b, c, materialIndex) {
+				var vertexColors = color === undefined ? [] : [scope.colors[a].clone(), scope.colors[b].clone(), scope.colors[c].clone()];
+				var vertexNormals = normal === undefined ? [] : [new Vector3().fromBufferAttribute(normal, a), new Vector3().fromBufferAttribute(normal, b), new Vector3().fromBufferAttribute(normal, c)];
+				var face = new Face3(a, b, c, vertexNormals, vertexColors, materialIndex);
+				scope.faces.push(face);
+
+				if (uv !== undefined) {
+					scope.faceVertexUvs[0].push([new Vector2().fromBufferAttribute(uv, a), new Vector2().fromBufferAttribute(uv, b), new Vector2().fromBufferAttribute(uv, c)]);
+				}
+
+				if (uv2 !== undefined) {
+					scope.faceVertexUvs[1].push([new Vector2().fromBufferAttribute(uv2, a), new Vector2().fromBufferAttribute(uv2, b), new Vector2().fromBufferAttribute(uv2, c)]);
+				}
+			}
+
+			var groups = geometry.groups;
+
+			if (groups.length > 0) {
+				for (var _i2 = 0; _i2 < groups.length; _i2++) {
+					var group = groups[_i2];
+					var start = group.start;
+					var count = group.count;
+
+					for (var j = start, jl = start + count; j < jl; j += 3) {
+						if (index !== undefined) {
+							addFace(index.getX(j), index.getX(j + 1), index.getX(j + 2), group.materialIndex);
+						} else {
+							addFace(j, j + 1, j + 2, group.materialIndex);
+						}
+					}
+				}
+			} else {
+				if (index !== undefined) {
+					for (var _i3 = 0; _i3 < index.count; _i3 += 3) {
+						addFace(index.getX(_i3), index.getX(_i3 + 1), index.getX(_i3 + 2));
+					}
+				} else {
+					for (var _i4 = 0; _i4 < position.count; _i4 += 3) {
+						addFace(_i4, _i4 + 1, _i4 + 2);
+					}
+				}
+			}
+
+			this.computeFaceNormals();
+
+			if (geometry.boundingBox !== null) {
+				this.boundingBox = geometry.boundingBox.clone();
+			}
+
+			if (geometry.boundingSphere !== null) {
+				this.boundingSphere = geometry.boundingSphere.clone();
+			}
+
+			return this;
+		},
+		center: function center() {
+			this.computeBoundingBox();
+			this.boundingBox.getCenter(_offset$1).negate();
+			this.translate(_offset$1.x, _offset$1.y, _offset$1.z);
+			return this;
+		},
+		normalize: function normalize() {
+			this.computeBoundingSphere();
+			var center = this.boundingSphere.center;
+			var radius = this.boundingSphere.radius;
+			var s = radius === 0 ? 1 : 1.0 / radius;
+			var matrix = new Matrix4();
+			matrix.set(s, 0, 0, -s * center.x, 0, s, 0, -s * center.y, 0, 0, s, -s * center.z, 0, 0, 0, 1);
+			this.applyMatrix4(matrix);
+			return this;
+		},
+		computeFaceNormals: function computeFaceNormals() {
+			var cb = new Vector3(),
+					ab = new Vector3();
+
+			for (var f = 0, fl = this.faces.length; f < fl; f++) {
+				var face = this.faces[f];
+				var vA = this.vertices[face.a];
+				var vB = this.vertices[face.b];
+				var vC = this.vertices[face.c];
+				cb.subVectors(vC, vB);
+				ab.subVectors(vA, vB);
+				cb.cross(ab);
+				cb.normalize();
+				face.normal.copy(cb);
+			}
+		},
+		computeVertexNormals: function computeVertexNormals(areaWeighted) {
+			if (areaWeighted === undefined) areaWeighted = true;
+			var vertices = new Array(this.vertices.length);
+
+			for (var v = 0, vl = this.vertices.length; v < vl; v++) {
+				vertices[v] = new Vector3();
+			}
+
+			if (areaWeighted) {
+				// vertex normals weighted by triangle areas
+				// http://www.iquilezles.org/www/articles/normals/normals.htm
+				var cb = new Vector3(),
+						ab = new Vector3();
+
+				for (var f = 0, fl = this.faces.length; f < fl; f++) {
+					var face = this.faces[f];
+					var vA = this.vertices[face.a];
+					var vB = this.vertices[face.b];
+					var vC = this.vertices[face.c];
+					cb.subVectors(vC, vB);
+					ab.subVectors(vA, vB);
+					cb.cross(ab);
+					vertices[face.a].add(cb);
+					vertices[face.b].add(cb);
+					vertices[face.c].add(cb);
+				}
+			} else {
+				this.computeFaceNormals();
+
+				for (var _f = 0, _fl = this.faces.length; _f < _fl; _f++) {
+					var _face = this.faces[_f];
+
+					vertices[_face.a].add(_face.normal);
+
+					vertices[_face.b].add(_face.normal);
+
+					vertices[_face.c].add(_face.normal);
+				}
+			}
+
+			for (var _v = 0, _vl = this.vertices.length; _v < _vl; _v++) {
+				vertices[_v].normalize();
+			}
+
+			for (var _f2 = 0, _fl2 = this.faces.length; _f2 < _fl2; _f2++) {
+				var _face2 = this.faces[_f2];
+				var vertexNormals = _face2.vertexNormals;
+
+				if (vertexNormals.length === 3) {
+					vertexNormals[0].copy(vertices[_face2.a]);
+					vertexNormals[1].copy(vertices[_face2.b]);
+					vertexNormals[2].copy(vertices[_face2.c]);
+				} else {
+					vertexNormals[0] = vertices[_face2.a].clone();
+					vertexNormals[1] = vertices[_face2.b].clone();
+					vertexNormals[2] = vertices[_face2.c].clone();
+				}
+			}
+
+			if (this.faces.length > 0) {
+				this.normalsNeedUpdate = true;
+			}
+		},
+		computeFlatVertexNormals: function computeFlatVertexNormals() {
+			this.computeFaceNormals();
+
+			for (var f = 0, fl = this.faces.length; f < fl; f++) {
+				var face = this.faces[f];
+				var vertexNormals = face.vertexNormals;
+
+				if (vertexNormals.length === 3) {
+					vertexNormals[0].copy(face.normal);
+					vertexNormals[1].copy(face.normal);
+					vertexNormals[2].copy(face.normal);
+				} else {
+					vertexNormals[0] = face.normal.clone();
+					vertexNormals[1] = face.normal.clone();
+					vertexNormals[2] = face.normal.clone();
+				}
+			}
+
+			if (this.faces.length > 0) {
+				this.normalsNeedUpdate = true;
+			}
+		},
+		computeMorphNormals: function computeMorphNormals() {
+			// save original normals
+			// - create temp variables on first access
+			//	 otherwise just copy (for faster repeated calls)
+			for (var f = 0, fl = this.faces.length; f < fl; f++) {
+				var face = this.faces[f];
+
+				if (!face.__originalFaceNormal) {
+					face.__originalFaceNormal = face.normal.clone();
+				} else {
+					face.__originalFaceNormal.copy(face.normal);
+				}
+
+				if (!face.__originalVertexNormals) face.__originalVertexNormals = [];
+
+				for (var i = 0, il = face.vertexNormals.length; i < il; i++) {
+					if (!face.__originalVertexNormals[i]) {
+						face.__originalVertexNormals[i] = face.vertexNormals[i].clone();
+					} else {
+						face.__originalVertexNormals[i].copy(face.vertexNormals[i]);
+					}
+				}
+			} // use temp geometry to compute face and vertex normals for each morph
+
+
+			var tmpGeo = new Geometry();
+			tmpGeo.faces = this.faces;
+
+			for (var _i5 = 0, _il2 = this.morphTargets.length; _i5 < _il2; _i5++) {
+				// create on first access
+				if (!this.morphNormals[_i5]) {
+					this.morphNormals[_i5] = {};
+					this.morphNormals[_i5].faceNormals = [];
+					this.morphNormals[_i5].vertexNormals = [];
+					var dstNormalsFace = this.morphNormals[_i5].faceNormals;
+					var dstNormalsVertex = this.morphNormals[_i5].vertexNormals;
+
+					for (var _f3 = 0, _fl3 = this.faces.length; _f3 < _fl3; _f3++) {
+						var faceNormal = new Vector3();
+						var vertexNormals = {
+							a: new Vector3(),
+							b: new Vector3(),
+							c: new Vector3()
+						};
+						dstNormalsFace.push(faceNormal);
+						dstNormalsVertex.push(vertexNormals);
+					}
+				}
+
+				var morphNormals = this.morphNormals[_i5]; // set vertices to morph target
+
+				tmpGeo.vertices = this.morphTargets[_i5].vertices; // compute morph normals
+
+				tmpGeo.computeFaceNormals();
+				tmpGeo.computeVertexNormals(); // store morph normals
+
+				for (var _f4 = 0, _fl4 = this.faces.length; _f4 < _fl4; _f4++) {
+					var _face3 = this.faces[_f4];
+					var _faceNormal = morphNormals.faceNormals[_f4];
+					var _vertexNormals = morphNormals.vertexNormals[_f4];
+
+					_faceNormal.copy(_face3.normal);
+
+					_vertexNormals.a.copy(_face3.vertexNormals[0]);
+
+					_vertexNormals.b.copy(_face3.vertexNormals[1]);
+
+					_vertexNormals.c.copy(_face3.vertexNormals[2]);
+				}
+			} // restore original normals
+
+
+			for (var _f5 = 0, _fl5 = this.faces.length; _f5 < _fl5; _f5++) {
+				var _face4 = this.faces[_f5];
+				_face4.normal = _face4.__originalFaceNormal;
+				_face4.vertexNormals = _face4.__originalVertexNormals;
+			}
+		},
+		computeBoundingBox: function computeBoundingBox() {
+			if (this.boundingBox === null) {
+				this.boundingBox = new Box3();
+			}
+
+			this.boundingBox.setFromPoints(this.vertices);
+		},
+		computeBoundingSphere: function computeBoundingSphere() {
+			if (this.boundingSphere === null) {
+				this.boundingSphere = new Sphere();
+			}
+
+			this.boundingSphere.setFromPoints(this.vertices);
+		},
+		merge: function merge(geometry, matrix, materialIndexOffset) {
+			if (!(geometry && geometry.isGeometry)) {
+				console.error('THREE.Geometry.merge(): geometry not an instance of THREE.Geometry.', geometry);
+				return;
+			}
+
+			var normalMatrix;
+			var vertexOffset = this.vertices.length,
+					vertices1 = this.vertices,
+					vertices2 = geometry.vertices,
+					faces1 = this.faces,
+					faces2 = geometry.faces,
+					colors1 = this.colors,
+					colors2 = geometry.colors;
+			if (materialIndexOffset === undefined) materialIndexOffset = 0;
+
+			if (matrix !== undefined) {
+				normalMatrix = new Matrix3().getNormalMatrix(matrix);
+			} // vertices
+
+
+			for (var i = 0, il = vertices2.length; i < il; i++) {
+				var vertex = vertices2[i];
+				var vertexCopy = vertex.clone();
+				if (matrix !== undefined) vertexCopy.applyMatrix4(matrix);
+				vertices1.push(vertexCopy);
+			} // colors
+
+
+			for (var _i6 = 0, _il3 = colors2.length; _i6 < _il3; _i6++) {
+				colors1.push(colors2[_i6].clone());
+			} // faces
+
+
+			for (var _i7 = 0, _il4 = faces2.length; _i7 < _il4; _i7++) {
+				var face = faces2[_i7];
+				var normal = void 0,
+						color = void 0;
+				var faceVertexNormals = face.vertexNormals,
+						faceVertexColors = face.vertexColors;
+				var faceCopy = new Face3(face.a + vertexOffset, face.b + vertexOffset, face.c + vertexOffset);
+				faceCopy.normal.copy(face.normal);
+
+				if (normalMatrix !== undefined) {
+					faceCopy.normal.applyMatrix3(normalMatrix).normalize();
+				}
+
+				for (var j = 0, jl = faceVertexNormals.length; j < jl; j++) {
+					normal = faceVertexNormals[j].clone();
+
+					if (normalMatrix !== undefined) {
+						normal.applyMatrix3(normalMatrix).normalize();
+					}
+
+					faceCopy.vertexNormals.push(normal);
+				}
+
+				faceCopy.color.copy(face.color);
+
+				for (var _j = 0, _jl = faceVertexColors.length; _j < _jl; _j++) {
+					color = faceVertexColors[_j];
+					faceCopy.vertexColors.push(color.clone());
+				}
+
+				faceCopy.materialIndex = face.materialIndex + materialIndexOffset;
+				faces1.push(faceCopy);
+			} // uvs
+
+
+			for (var _i8 = 0, _il5 = geometry.faceVertexUvs.length; _i8 < _il5; _i8++) {
+				var faceVertexUvs2 = geometry.faceVertexUvs[_i8];
+				if (this.faceVertexUvs[_i8] === undefined) this.faceVertexUvs[_i8] = [];
+
+				for (var _j2 = 0, _jl2 = faceVertexUvs2.length; _j2 < _jl2; _j2++) {
+					var uvs2 = faceVertexUvs2[_j2],
+							uvsCopy = [];
+
+					for (var k = 0, kl = uvs2.length; k < kl; k++) {
+						uvsCopy.push(uvs2[k].clone());
+					}
+
+					this.faceVertexUvs[_i8].push(uvsCopy);
+				}
+			}
+		},
+		mergeMesh: function mergeMesh(mesh) {
+			if (!(mesh && mesh.isMesh)) {
+				console.error('THREE.Geometry.mergeMesh(): mesh not an instance of THREE.Mesh.', mesh);
+				return;
+			}
+
+			if (mesh.matrixAutoUpdate) mesh.updateMatrix();
+			this.merge(mesh.geometry, mesh.matrix);
+		},
+
+		/*
+		 * Checks for duplicate vertices with hashmap.
+		 * Duplicated vertices are removed
+		 * and faces' vertices are updated.
+		 */
+		mergeVertices: function mergeVertices() {
+			var verticesMap = {}; // Hashmap for looking up vertices by position coordinates (and making sure they are unique)
+
+			var unique = [],
+					changes = [];
+			var precisionPoints = 4; // number of decimal points, e.g. 4 for epsilon of 0.0001
+
+			var precision = Math.pow(10, precisionPoints);
+
+			for (var i = 0, il = this.vertices.length; i < il; i++) {
+				var v = this.vertices[i];
+				var key = Math.round(v.x * precision) + '_' + Math.round(v.y * precision) + '_' + Math.round(v.z * precision);
+
+				if (verticesMap[key] === undefined) {
+					verticesMap[key] = i;
+					unique.push(this.vertices[i]);
+					changes[i] = unique.length - 1;
+				} else {
+					//console.log('Duplicate vertex found. ', i, ' could be using ', verticesMap[key]);
+					changes[i] = changes[verticesMap[key]];
+				}
+			} // if faces are completely degenerate after merging vertices, we
+			// have to remove them from the geometry.
+
+
+			var faceIndicesToRemove = [];
+
+			for (var _i9 = 0, _il6 = this.faces.length; _i9 < _il6; _i9++) {
+				var face = this.faces[_i9];
+				face.a = changes[face.a];
+				face.b = changes[face.b];
+				face.c = changes[face.c];
+				var indices = [face.a, face.b, face.c]; // if any duplicate vertices are found in a Face3
+				// we have to remove the face as nothing can be saved
+
+				for (var n = 0; n < 3; n++) {
+					if (indices[n] === indices[(n + 1) % 3]) {
+						faceIndicesToRemove.push(_i9);
+						break;
+					}
+				}
+			}
+
+			for (var _i10 = faceIndicesToRemove.length - 1; _i10 >= 0; _i10--) {
+				var idx = faceIndicesToRemove[_i10];
+				this.faces.splice(idx, 1);
+
+				for (var j = 0, jl = this.faceVertexUvs.length; j < jl; j++) {
+					this.faceVertexUvs[j].splice(idx, 1);
+				}
+			} // Use unique set of vertices
+
+
+			var diff = this.vertices.length - unique.length;
+			this.vertices = unique;
+			return diff;
+		},
+		setFromPoints: function setFromPoints(points) {
+			this.vertices = [];
+
+			for (var i = 0, l = points.length; i < l; i++) {
+				var point = points[i];
+				this.vertices.push(new Vector3(point.x, point.y, point.z || 0));
+			}
+
+			return this;
+		},
+		sortFacesByMaterialIndex: function sortFacesByMaterialIndex() {
+			var faces = this.faces;
+			var length = faces.length; // tag faces
+
+			for (var i = 0; i < length; i++) {
+				faces[i]._id = i;
+			} // sort faces
+
+
+			function materialIndexSort(a, b) {
+				return a.materialIndex - b.materialIndex;
+			}
+
+			faces.sort(materialIndexSort); // sort uvs
+
+			var uvs1 = this.faceVertexUvs[0];
+			var uvs2 = this.faceVertexUvs[1];
+			var newUvs1, newUvs2;
+			if (uvs1 && uvs1.length === length) newUvs1 = [];
+			if (uvs2 && uvs2.length === length) newUvs2 = [];
+
+			for (var _i11 = 0; _i11 < length; _i11++) {
+				var id = faces[_i11]._id;
+				if (newUvs1) newUvs1.push(uvs1[id]);
+				if (newUvs2) newUvs2.push(uvs2[id]);
+			}
+
+			if (newUvs1) this.faceVertexUvs[0] = newUvs1;
+			if (newUvs2) this.faceVertexUvs[1] = newUvs2;
+		},
+		toJSON: function toJSON() {
+			var data = {
+				metadata: {
+					version: 4.5,
+					type: 'Geometry',
+					generator: 'Geometry.toJSON'
+				}
+			}; // standard Geometry serialization
+
+			data.uuid = this.uuid;
+			data.type = this.type;
+			if (this.name !== '') data.name = this.name;
+
+			if (this.parameters !== undefined) {
+				var parameters = this.parameters;
+
+				for (var key in parameters) {
+					if (parameters[key] !== undefined) data[key] = parameters[key];
+				}
+
+				return data;
+			}
+
+			var vertices = [];
+
+			for (var i = 0; i < this.vertices.length; i++) {
+				var vertex = this.vertices[i];
+				vertices.push(vertex.x, vertex.y, vertex.z);
+			}
+
+			var faces = [];
+			var normals = [];
+			var normalsHash = {};
+			var colors = [];
+			var colorsHash = {};
+			var uvs = [];
+			var uvsHash = {};
+
+			for (var _i12 = 0; _i12 < this.faces.length; _i12++) {
+				var face = this.faces[_i12];
+				var hasMaterial = true;
+				var hasFaceUv = false; // deprecated
+
+				var hasFaceVertexUv = this.faceVertexUvs[0][_i12] !== undefined;
+				var hasFaceNormal = face.normal.length() > 0;
+				var hasFaceVertexNormal = face.vertexNormals.length > 0;
+				var hasFaceColor = face.color.r !== 1 || face.color.g !== 1 || face.color.b !== 1;
+				var hasFaceVertexColor = face.vertexColors.length > 0;
+				var faceType = 0;
+				faceType = setBit(faceType, 0, 0); // isQuad
+
+				faceType = setBit(faceType, 1, hasMaterial);
+				faceType = setBit(faceType, 2, hasFaceUv);
+				faceType = setBit(faceType, 3, hasFaceVertexUv);
+				faceType = setBit(faceType, 4, hasFaceNormal);
+				faceType = setBit(faceType, 5, hasFaceVertexNormal);
+				faceType = setBit(faceType, 6, hasFaceColor);
+				faceType = setBit(faceType, 7, hasFaceVertexColor);
+				faces.push(faceType);
+				faces.push(face.a, face.b, face.c);
+				faces.push(face.materialIndex);
+
+				if (hasFaceVertexUv) {
+					var faceVertexUvs = this.faceVertexUvs[0][_i12];
+					faces.push(getUvIndex(faceVertexUvs[0]), getUvIndex(faceVertexUvs[1]), getUvIndex(faceVertexUvs[2]));
+				}
+
+				if (hasFaceNormal) {
+					faces.push(getNormalIndex(face.normal));
+				}
+
+				if (hasFaceVertexNormal) {
+					var vertexNormals = face.vertexNormals;
+					faces.push(getNormalIndex(vertexNormals[0]), getNormalIndex(vertexNormals[1]), getNormalIndex(vertexNormals[2]));
+				}
+
+				if (hasFaceColor) {
+					faces.push(getColorIndex(face.color));
+				}
+
+				if (hasFaceVertexColor) {
+					var vertexColors = face.vertexColors;
+					faces.push(getColorIndex(vertexColors[0]), getColorIndex(vertexColors[1]), getColorIndex(vertexColors[2]));
+				}
+			}
+
+			function setBit(value, position, enabled) {
+				return enabled ? value | 1 << position : value & ~(1 << position);
+			}
+
+			function getNormalIndex(normal) {
+				var hash = normal.x.toString() + normal.y.toString() + normal.z.toString();
+
+				if (normalsHash[hash] !== undefined) {
+					return normalsHash[hash];
+				}
+
+				normalsHash[hash] = normals.length / 3;
+				normals.push(normal.x, normal.y, normal.z);
+				return normalsHash[hash];
+			}
+
+			function getColorIndex(color) {
+				var hash = color.r.toString() + color.g.toString() + color.b.toString();
+
+				if (colorsHash[hash] !== undefined) {
+					return colorsHash[hash];
+				}
+
+				colorsHash[hash] = colors.length;
+				colors.push(color.getHex());
+				return colorsHash[hash];
+			}
+
+			function getUvIndex(uv) {
+				var hash = uv.x.toString() + uv.y.toString();
+
+				if (uvsHash[hash] !== undefined) {
+					return uvsHash[hash];
+				}
+
+				uvsHash[hash] = uvs.length / 2;
+				uvs.push(uv.x, uv.y);
+				return uvsHash[hash];
+			}
+
+			data.data = {};
+			data.data.vertices = vertices;
+			data.data.normals = normals;
+			if (colors.length > 0) data.data.colors = colors;
+			if (uvs.length > 0) data.data.uvs = [uvs]; // temporal backward compatibility
+
+			data.data.faces = faces;
+			return data;
+		},
+		clone: function clone() {
+			/*
+			 // Handle primitives
+				 const parameters = this.parameters;
+				 if ( parameters !== undefined ) {
+				 const values = [];
+				 for ( const key in parameters ) {
+				 values.push( parameters[ key ] );
+				 }
+				 const geometry = Object.create( this.constructor.prototype );
+			 this.constructor.apply( geometry, values );
+			 return geometry;
+				 }
+				 return new this.constructor().copy( this );
+			 */
+			return new Geometry().copy(this);
+		},
+		copy: function copy(source) {
+			// reset
+			this.vertices = [];
+			this.colors = [];
+			this.faces = [];
+			this.faceVertexUvs = [[]];
+			this.morphTargets = [];
+			this.morphNormals = [];
+			this.skinWeights = [];
+			this.skinIndices = [];
+			this.lineDistances = [];
+			this.boundingBox = null;
+			this.boundingSphere = null; // name
+
+			this.name = source.name; // vertices
+
+			var vertices = source.vertices;
+
+			for (var i = 0, il = vertices.length; i < il; i++) {
+				this.vertices.push(vertices[i].clone());
+			} // colors
+
+
+			var colors = source.colors;
+
+			for (var _i13 = 0, _il7 = colors.length; _i13 < _il7; _i13++) {
+				this.colors.push(colors[_i13].clone());
+			} // faces
+
+
+			var faces = source.faces;
+
+			for (var _i14 = 0, _il8 = faces.length; _i14 < _il8; _i14++) {
+				this.faces.push(faces[_i14].clone());
+			} // face vertex uvs
+
+
+			for (var _i15 = 0, _il9 = source.faceVertexUvs.length; _i15 < _il9; _i15++) {
+				var faceVertexUvs = source.faceVertexUvs[_i15];
+
+				if (this.faceVertexUvs[_i15] === undefined) {
+					this.faceVertexUvs[_i15] = [];
+				}
+
+				for (var j = 0, jl = faceVertexUvs.length; j < jl; j++) {
+					var uvs = faceVertexUvs[j],
+							uvsCopy = [];
+
+					for (var k = 0, kl = uvs.length; k < kl; k++) {
+						var uv = uvs[k];
+						uvsCopy.push(uv.clone());
+					}
+
+					this.faceVertexUvs[_i15].push(uvsCopy);
+				}
+			} // morph targets
+
+
+			var morphTargets = source.morphTargets;
+
+			for (var _i16 = 0, _il10 = morphTargets.length; _i16 < _il10; _i16++) {
+				var morphTarget = {};
+				morphTarget.name = morphTargets[_i16].name; // vertices
+
+				if (morphTargets[_i16].vertices !== undefined) {
+					morphTarget.vertices = [];
+
+					for (var _j3 = 0, _jl3 = morphTargets[_i16].vertices.length; _j3 < _jl3; _j3++) {
+						morphTarget.vertices.push(morphTargets[_i16].vertices[_j3].clone());
+					}
+				} // normals
+
+
+				if (morphTargets[_i16].normals !== undefined) {
+					morphTarget.normals = [];
+
+					for (var _j4 = 0, _jl4 = morphTargets[_i16].normals.length; _j4 < _jl4; _j4++) {
+						morphTarget.normals.push(morphTargets[_i16].normals[_j4].clone());
+					}
+				}
+
+				this.morphTargets.push(morphTarget);
+			} // morph normals
+
+
+			var morphNormals = source.morphNormals;
+
+			for (var _i17 = 0, _il11 = morphNormals.length; _i17 < _il11; _i17++) {
+				var morphNormal = {}; // vertex normals
+
+				if (morphNormals[_i17].vertexNormals !== undefined) {
+					morphNormal.vertexNormals = [];
+
+					for (var _j5 = 0, _jl5 = morphNormals[_i17].vertexNormals.length; _j5 < _jl5; _j5++) {
+						var srcVertexNormal = morphNormals[_i17].vertexNormals[_j5];
+						var destVertexNormal = {};
+						destVertexNormal.a = srcVertexNormal.a.clone();
+						destVertexNormal.b = srcVertexNormal.b.clone();
+						destVertexNormal.c = srcVertexNormal.c.clone();
+						morphNormal.vertexNormals.push(destVertexNormal);
+					}
+				} // face normals
+
+
+				if (morphNormals[_i17].faceNormals !== undefined) {
+					morphNormal.faceNormals = [];
+
+					for (var _j6 = 0, _jl6 = morphNormals[_i17].faceNormals.length; _j6 < _jl6; _j6++) {
+						morphNormal.faceNormals.push(morphNormals[_i17].faceNormals[_j6].clone());
+					}
+				}
+
+				this.morphNormals.push(morphNormal);
+			} // skin weights
+
+
+			var skinWeights = source.skinWeights;
+
+			for (var _i18 = 0, _il12 = skinWeights.length; _i18 < _il12; _i18++) {
+				this.skinWeights.push(skinWeights[_i18].clone());
+			} // skin indices
+
+
+			var skinIndices = source.skinIndices;
+
+			for (var _i19 = 0, _il13 = skinIndices.length; _i19 < _il13; _i19++) {
+				this.skinIndices.push(skinIndices[_i19].clone());
+			} // line distances
+
+
+			var lineDistances = source.lineDistances;
+
+			for (var _i20 = 0, _il14 = lineDistances.length; _i20 < _il14; _i20++) {
+				this.lineDistances.push(lineDistances[_i20]);
+			} // bounding box
+
+
+			var boundingBox = source.boundingBox;
+
+			if (boundingBox !== null) {
+				this.boundingBox = boundingBox.clone();
+			} // bounding sphere
+
+
+			var boundingSphere = source.boundingSphere;
+
+			if (boundingSphere !== null) {
+				this.boundingSphere = boundingSphere.clone();
+			} // update flags
+
+
+			this.elementsNeedUpdate = source.elementsNeedUpdate;
+			this.verticesNeedUpdate = source.verticesNeedUpdate;
+			this.uvsNeedUpdate = source.uvsNeedUpdate;
+			this.normalsNeedUpdate = source.normalsNeedUpdate;
+			this.colorsNeedUpdate = source.colorsNeedUpdate;
+			this.lineDistancesNeedUpdate = source.lineDistancesNeedUpdate;
+			this.groupsNeedUpdate = source.groupsNeedUpdate;
+			return this;
+		},
+		dispose: function dispose() {
+			this.dispatchEvent({
+				type: 'dispose'
+			});
+		}
+	});
+
+	/**
+	 * Port from https://github.com/mapbox/earcut (v2.2.2)
+	 */
+	var Earcut = {
+		triangulate: function triangulate(data, holeIndices, dim) {
+			dim = dim || 2;
+			var hasHoles = holeIndices && holeIndices.length;
+			var outerLen = hasHoles ? holeIndices[0] * dim : data.length;
+			var outerNode = linkedList(data, 0, outerLen, dim, true);
+			var triangles = [];
+			if (!outerNode || outerNode.next === outerNode.prev) return triangles;
+			var minX, minY, maxX, maxY, x, y, invSize;
+			if (hasHoles) outerNode = eliminateHoles(data, holeIndices, outerNode, dim); // if the shape is not too simple, we'll use z-order curve hash later; calculate polygon bbox
+
+			if (data.length > 80 * dim) {
+				minX = maxX = data[0];
+				minY = maxY = data[1];
+
+				for (var i = dim; i < outerLen; i += dim) {
+					x = data[i];
+					y = data[i + 1];
+					if (x < minX) minX = x;
+					if (y < minY) minY = y;
+					if (x > maxX) maxX = x;
+					if (y > maxY) maxY = y;
+				} // minX, minY and invSize are later used to transform coords into integers for z-order calculation
+
+
+				invSize = Math.max(maxX - minX, maxY - minY);
+				invSize = invSize !== 0 ? 1 / invSize : 0;
+			}
+
+			earcutLinked(outerNode, triangles, dim, minX, minY, invSize);
+			return triangles;
+		}
+	}; // create a circular doubly linked list from polygon points in the specified winding order
+
+	function linkedList(data, start, end, dim, clockwise) {
+		var i, last;
+
+		if (clockwise === signedArea(data, start, end, dim) > 0) {
+			for (i = start; i < end; i += dim) {
+				last = insertNode(i, data[i], data[i + 1], last);
+			}
+		} else {
+			for (i = end - dim; i >= start; i -= dim) {
+				last = insertNode(i, data[i], data[i + 1], last);
+			}
+		}
+
+		if (last && equals(last, last.next)) {
+			removeNode(last);
+			last = last.next;
+		}
+
+		return last;
+	} // eliminate colinear or duplicate points
+
+
+	function filterPoints(start, end) {
+		if (!start) return start;
+		if (!end) end = start;
+		var p = start,
+				again;
+
+		do {
+			again = false;
+
+			if (!p.steiner && (equals(p, p.next) || area(p.prev, p, p.next) === 0)) {
+				removeNode(p);
+				p = end = p.prev;
+				if (p === p.next) break;
+				again = true;
+			} else {
+				p = p.next;
+			}
+		} while (again || p !== end);
+
+		return end;
+	} // main ear slicing loop which triangulates a polygon (given as a linked list)
+
+
+	function earcutLinked(ear, triangles, dim, minX, minY, invSize, pass) {
+		if (!ear) return; // interlink polygon nodes in z-order
+
+		if (!pass && invSize) indexCurve(ear, minX, minY, invSize);
+		var stop = ear,
+				prev,
+				next; // iterate through ears, slicing them one by one
+
+		while (ear.prev !== ear.next) {
+			prev = ear.prev;
+			next = ear.next;
+
+			if (invSize ? isEarHashed(ear, minX, minY, invSize) : isEar(ear)) {
+				// cut off the triangle
+				triangles.push(prev.i / dim);
+				triangles.push(ear.i / dim);
+				triangles.push(next.i / dim);
+				removeNode(ear); // skipping the next vertex leads to less sliver triangles
+
+				ear = next.next;
+				stop = next.next;
+				continue;
+			}
+
+			ear = next; // if we looped through the whole remaining polygon and can't find any more ears
+
+			if (ear === stop) {
+				// try filtering points and slicing again
+				if (!pass) {
+					earcutLinked(filterPoints(ear), triangles, dim, minX, minY, invSize, 1); // if this didn't work, try curing all small self-intersections locally
+				} else if (pass === 1) {
+					ear = cureLocalIntersections(filterPoints(ear), triangles, dim);
+					earcutLinked(ear, triangles, dim, minX, minY, invSize, 2); // as a last resort, try splitting the remaining polygon into two
+				} else if (pass === 2) {
+					splitEarcut(ear, triangles, dim, minX, minY, invSize);
+				}
+
+				break;
+			}
+		}
+	} // check whether a polygon node forms a valid ear with adjacent nodes
+
+
+	function isEar(ear) {
+		var a = ear.prev,
+				b = ear,
+				c = ear.next;
+		if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
+		// now make sure we don't have other points inside the potential ear
+
+		var p = ear.next.next;
+
+		while (p !== ear.prev) {
+			if (pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
+			p = p.next;
+		}
+
+		return true;
+	}
+
+	function isEarHashed(ear, minX, minY, invSize) {
+		var a = ear.prev,
+				b = ear,
+				c = ear.next;
+		if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
+		// triangle bbox; min & max are calculated like this for speed
+
+		var minTX = a.x < b.x ? a.x < c.x ? a.x : c.x : b.x < c.x ? b.x : c.x,
+				minTY = a.y < b.y ? a.y < c.y ? a.y : c.y : b.y < c.y ? b.y : c.y,
+				maxTX = a.x > b.x ? a.x > c.x ? a.x : c.x : b.x > c.x ? b.x : c.x,
+				maxTY = a.y > b.y ? a.y > c.y ? a.y : c.y : b.y > c.y ? b.y : c.y; // z-order range for the current triangle bbox;
+
+		var minZ = zOrder(minTX, minTY, minX, minY, invSize),
+				maxZ = zOrder(maxTX, maxTY, minX, minY, invSize);
+		var p = ear.prevZ,
+				n = ear.nextZ; // look for points inside the triangle in both directions
+
+		while (p && p.z >= minZ && n && n.z <= maxZ) {
+			if (p !== ear.prev && p !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
+			p = p.prevZ;
+			if (n !== ear.prev && n !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) && area(n.prev, n, n.next) >= 0) return false;
+			n = n.nextZ;
+		} // look for remaining points in decreasing z-order
+
+
+		while (p && p.z >= minZ) {
+			if (p !== ear.prev && p !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
+			p = p.prevZ;
+		} // look for remaining points in increasing z-order
+
+
+		while (n && n.z <= maxZ) {
+			if (n !== ear.prev && n !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) && area(n.prev, n, n.next) >= 0) return false;
+			n = n.nextZ;
+		}
+
+		return true;
+	} // go through all polygon nodes and cure small local self-intersections
+
+
+	function cureLocalIntersections(start, triangles, dim) {
+		var p = start;
+
+		do {
+			var a = p.prev,
+					b = p.next.next;
+
+			if (!equals(a, b) && intersects(a, p, p.next, b) && locallyInside(a, b) && locallyInside(b, a)) {
+				triangles.push(a.i / dim);
+				triangles.push(p.i / dim);
+				triangles.push(b.i / dim); // remove two nodes involved
+
+				removeNode(p);
+				removeNode(p.next);
+				p = start = b;
+			}
+
+			p = p.next;
+		} while (p !== start);
+
+		return filterPoints(p);
+	} // try splitting polygon into two and triangulate them independently
+
+
+	function splitEarcut(start, triangles, dim, minX, minY, invSize) {
+		// look for a valid diagonal that divides the polygon into two
+		var a = start;
+
+		do {
+			var b = a.next.next;
+
+			while (b !== a.prev) {
+				if (a.i !== b.i && isValidDiagonal(a, b)) {
+					// split the polygon in two by the diagonal
+					var c = splitPolygon(a, b); // filter colinear points around the cuts
+
+					a = filterPoints(a, a.next);
+					c = filterPoints(c, c.next); // run earcut on each half
+
+					earcutLinked(a, triangles, dim, minX, minY, invSize);
+					earcutLinked(c, triangles, dim, minX, minY, invSize);
+					return;
+				}
+
+				b = b.next;
+			}
+
+			a = a.next;
+		} while (a !== start);
+	} // link every hole into the outer loop, producing a single-ring polygon without holes
+
+
+	function eliminateHoles(data, holeIndices, outerNode, dim) {
+		var queue = [];
+		var i, len, start, end, list;
+
+		for (i = 0, len = holeIndices.length; i < len; i++) {
+			start = holeIndices[i] * dim;
+			end = i < len - 1 ? holeIndices[i + 1] * dim : data.length;
+			list = linkedList(data, start, end, dim, false);
+			if (list === list.next) list.steiner = true;
+			queue.push(getLeftmost(list));
+		}
+
+		queue.sort(compareX); // process holes from left to right
+
+		for (i = 0; i < queue.length; i++) {
+			eliminateHole(queue[i], outerNode);
+			outerNode = filterPoints(outerNode, outerNode.next);
+		}
+
+		return outerNode;
+	}
+
+	function compareX(a, b) {
+		return a.x - b.x;
+	} // find a bridge between vertices that connects hole with an outer ring and and link it
+
+
+	function eliminateHole(hole, outerNode) {
+		outerNode = findHoleBridge(hole, outerNode);
+
+		if (outerNode) {
+			var b = splitPolygon(outerNode, hole); // filter collinear points around the cuts
+
+			filterPoints(outerNode, outerNode.next);
+			filterPoints(b, b.next);
+		}
+	} // David Eberly's algorithm for finding a bridge between hole and outer polygon
+
+
+	function findHoleBridge(hole, outerNode) {
+		var p = outerNode;
+		var hx = hole.x;
+		var hy = hole.y;
+		var qx = -Infinity,
+				m; // find a segment intersected by a ray from the hole's leftmost point to the left;
+		// segment's endpoint with lesser x will be potential connection point
+
+		do {
+			if (hy <= p.y && hy >= p.next.y && p.next.y !== p.y) {
+				var x = p.x + (hy - p.y) * (p.next.x - p.x) / (p.next.y - p.y);
+
+				if (x <= hx && x > qx) {
+					qx = x;
+
+					if (x === hx) {
+						if (hy === p.y) return p;
+						if (hy === p.next.y) return p.next;
+					}
+
+					m = p.x < p.next.x ? p : p.next;
+				}
+			}
+
+			p = p.next;
+		} while (p !== outerNode);
+
+		if (!m) return null;
+		if (hx === qx) return m; // hole touches outer segment; pick leftmost endpoint
+		// look for points inside the triangle of hole point, segment intersection and endpoint;
+		// if there are no points found, we have a valid connection;
+		// otherwise choose the point of the minimum angle with the ray as connection point
+
+		var stop = m,
+				mx = m.x,
+				my = m.y;
+		var tanMin = Infinity,
+				tan;
+		p = m;
+
+		do {
+			if (hx >= p.x && p.x >= mx && hx !== p.x && pointInTriangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, p.x, p.y)) {
+				tan = Math.abs(hy - p.y) / (hx - p.x); // tangential
+
+				if (locallyInside(p, hole) && (tan < tanMin || tan === tanMin && (p.x > m.x || p.x === m.x && sectorContainsSector(m, p)))) {
+					m = p;
+					tanMin = tan;
+				}
+			}
+
+			p = p.next;
+		} while (p !== stop);
+
+		return m;
+	} // whether sector in vertex m contains sector in vertex p in the same coordinates
+
+
+	function sectorContainsSector(m, p) {
+		return area(m.prev, m, p.prev) < 0 && area(p.next, m, m.next) < 0;
+	} // interlink polygon nodes in z-order
+
+
+	function indexCurve(start, minX, minY, invSize) {
+		var p = start;
+
+		do {
+			if (p.z === null) p.z = zOrder(p.x, p.y, minX, minY, invSize);
+			p.prevZ = p.prev;
+			p.nextZ = p.next;
+			p = p.next;
+		} while (p !== start);
+
+		p.prevZ.nextZ = null;
+		p.prevZ = null;
+		sortLinked(p);
+	} // Simon Tatham's linked list merge sort algorithm
+	// http://www.chiark.greenend.org.uk/~sgtatham/algorithms/listsort.html
+
+
+	function sortLinked(list) {
+		var i,
+				p,
+				q,
+				e,
+				tail,
+				numMerges,
+				pSize,
+				qSize,
+				inSize = 1;
+
+		do {
+			p = list;
+			list = null;
+			tail = null;
+			numMerges = 0;
+
+			while (p) {
+				numMerges++;
+				q = p;
+				pSize = 0;
+
+				for (i = 0; i < inSize; i++) {
+					pSize++;
+					q = q.nextZ;
+					if (!q) break;
+				}
+
+				qSize = inSize;
+
+				while (pSize > 0 || qSize > 0 && q) {
+					if (pSize !== 0 && (qSize === 0 || !q || p.z <= q.z)) {
+						e = p;
+						p = p.nextZ;
+						pSize--;
+					} else {
+						e = q;
+						q = q.nextZ;
+						qSize--;
+					}
+
+					if (tail) tail.nextZ = e;else list = e;
+					e.prevZ = tail;
+					tail = e;
+				}
+
+				p = q;
+			}
+
+			tail.nextZ = null;
+			inSize *= 2;
+		} while (numMerges > 1);
+
+		return list;
+	} // z-order of a point given coords and inverse of the longer side of data bbox
+
+
+	function zOrder(x, y, minX, minY, invSize) {
+		// coords are transformed into non-negative 15-bit integer range
+		x = 32767 * (x - minX) * invSize;
+		y = 32767 * (y - minY) * invSize;
+		x = (x | x << 8) & 0x00FF00FF;
+		x = (x | x << 4) & 0x0F0F0F0F;
+		x = (x | x << 2) & 0x33333333;
+		x = (x | x << 1) & 0x55555555;
+		y = (y | y << 8) & 0x00FF00FF;
+		y = (y | y << 4) & 0x0F0F0F0F;
+		y = (y | y << 2) & 0x33333333;
+		y = (y | y << 1) & 0x55555555;
+		return x | y << 1;
+	} // find the leftmost node of a polygon ring
+
+
+	function getLeftmost(start) {
+		var p = start,
+				leftmost = start;
+
+		do {
+			if (p.x < leftmost.x || p.x === leftmost.x && p.y < leftmost.y) leftmost = p;
+			p = p.next;
+		} while (p !== start);
+
+		return leftmost;
+	} // check if a point lies within a convex triangle
+
+
+	function pointInTriangle(ax, ay, bx, by, cx, cy, px, py) {
+		return (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0 && (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0 && (bx - px) * (cy - py) - (cx - px) * (by - py) >= 0;
+	} // check if a diagonal between two polygon nodes is valid (lies in polygon interior)
+
+
+	function isValidDiagonal(a, b) {
+		return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) && ( // dones't intersect other edges
+		locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && ( // locally visible
+		area(a.prev, a, b.prev) || area(a, b.prev, b)) || // does not create opposite-facing sectors
+		equals(a, b) && area(a.prev, a, a.next) > 0 && area(b.prev, b, b.next) > 0); // special zero-length case
+	} // signed area of a triangle
+
+
+	function area(p, q, r) {
+		return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
+	} // check if two points are equal
+
+
+	function equals(p1, p2) {
+		return p1.x === p2.x && p1.y === p2.y;
+	} // check if two segments intersect
+
+
+	function intersects(p1, q1, p2, q2) {
+		var o1 = sign(area(p1, q1, p2));
+		var o2 = sign(area(p1, q1, q2));
+		var o3 = sign(area(p2, q2, p1));
+		var o4 = sign(area(p2, q2, q1));
+		if (o1 !== o2 && o3 !== o4) return true; // general case
+
+		if (o1 === 0 && onSegment(p1, p2, q1)) return true; // p1, q1 and p2 are collinear and p2 lies on p1q1
+
+		if (o2 === 0 && onSegment(p1, q2, q1)) return true; // p1, q1 and q2 are collinear and q2 lies on p1q1
+
+		if (o3 === 0 && onSegment(p2, p1, q2)) return true; // p2, q2 and p1 are collinear and p1 lies on p2q2
+
+		if (o4 === 0 && onSegment(p2, q1, q2)) return true; // p2, q2 and q1 are collinear and q1 lies on p2q2
+
+		return false;
+	} // for collinear points p, q, r, check if point q lies on segment pr
+
+
+	function onSegment(p, q, r) {
+		return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) && q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
+	}
+
+	function sign(num) {
+		return num > 0 ? 1 : num < 0 ? -1 : 0;
+	} // check if a polygon diagonal intersects any polygon segments
+
+
+	function intersectsPolygon(a, b) {
+		var p = a;
+
+		do {
+			if (p.i !== a.i && p.next.i !== a.i && p.i !== b.i && p.next.i !== b.i && intersects(p, p.next, a, b)) return true;
+			p = p.next;
+		} while (p !== a);
+
+		return false;
+	} // check if a polygon diagonal is locally inside the polygon
+
+
+	function locallyInside(a, b) {
+		return area(a.prev, a, a.next) < 0 ? area(a, b, a.next) >= 0 && area(a, a.prev, b) >= 0 : area(a, b, a.prev) < 0 || area(a, a.next, b) < 0;
+	} // check if the middle point of a polygon diagonal is inside the polygon
+
+
+	function middleInside(a, b) {
+		var p = a,
+				inside = false;
+		var px = (a.x + b.x) / 2,
+				py = (a.y + b.y) / 2;
+
+		do {
+			if (p.y > py !== p.next.y > py && p.next.y !== p.y && px < (p.next.x - p.x) * (py - p.y) / (p.next.y - p.y) + p.x) inside = !inside;
+			p = p.next;
+		} while (p !== a);
+
+		return inside;
+	} // link two polygon vertices with a bridge; if the vertices belong to the same ring, it splits polygon into two;
+	// if one belongs to the outer ring and another to a hole, it merges it into a single ring
+
+
+	function splitPolygon(a, b) {
+		var a2 = new Node(a.i, a.x, a.y),
+				b2 = new Node(b.i, b.x, b.y),
+				an = a.next,
+				bp = b.prev;
+		a.next = b;
+		b.prev = a;
+		a2.next = an;
+		an.prev = a2;
+		b2.next = a2;
+		a2.prev = b2;
+		bp.next = b2;
+		b2.prev = bp;
+		return b2;
+	} // create a node and optionally link it with previous one (in a circular doubly linked list)
+
+
+	function insertNode(i, x, y, last) {
+		var p = new Node(i, x, y);
+
+		if (!last) {
+			p.prev = p;
+			p.next = p;
+		} else {
+			p.next = last.next;
+			p.prev = last;
+			last.next.prev = p;
+			last.next = p;
+		}
+
+		return p;
+	}
+
+	function removeNode(p) {
+		p.next.prev = p.prev;
+		p.prev.next = p.next;
+		if (p.prevZ) p.prevZ.nextZ = p.nextZ;
+		if (p.nextZ) p.nextZ.prevZ = p.prevZ;
+	}
+
+	function Node(i, x, y) {
+		// vertex index in coordinates array
+		this.i = i; // vertex coordinates
+
+		this.x = x;
+		this.y = y; // previous and next vertex nodes in a polygon ring
+
+		this.prev = null;
+		this.next = null; // z-order curve value
+
+		this.z = null; // previous and next nodes in z-order
+
+		this.prevZ = null;
+		this.nextZ = null; // indicates whether this is a steiner point
+
+		this.steiner = false;
+	}
+
+	function signedArea(data, start, end, dim) {
+		var sum = 0;
+
+		for (var i = start, j = end - dim; i < end; i += dim) {
+			sum += (data[j] - data[i]) * (data[i + 1] + data[j + 1]);
+			j = i;
+		}
+
+		return sum;
+	}
+
+	var ShapeUtils = {
+		// calculate area of the contour polygon
+		area: function area(contour) {
+			var n = contour.length;
+			var a = 0.0;
+
+			for (var p = n - 1, q = 0; q < n; p = q++) {
+				a += contour[p].x * contour[q].y - contour[q].x * contour[p].y;
+			}
+
+			return a * 0.5;
+		},
+		isClockWise: function isClockWise(pts) {
+			return ShapeUtils.area(pts) < 0;
+		},
+		triangulateShape: function triangulateShape(contour, holes) {
+			var vertices = []; // flat array of vertices like [ x0,y0, x1,y1, x2,y2, ... ]
+
+			var holeIndices = []; // array of hole indices
+
+			var faces = []; // final array of vertex indices like [ [ a,b,d ], [ b,c,d ] ]
+
+			removeDupEndPts(contour);
+			addContour(vertices, contour); //
+
+			var holeIndex = contour.length;
+			holes.forEach(removeDupEndPts);
+
+			for (var i = 0; i < holes.length; i++) {
+				holeIndices.push(holeIndex);
+				holeIndex += holes[i].length;
+				addContour(vertices, holes[i]);
+			} //
+
+
+			var triangles = Earcut.triangulate(vertices, holeIndices); //
+
+			for (var _i = 0; _i < triangles.length; _i += 3) {
+				faces.push(triangles.slice(_i, _i + 3));
+			}
+
+			return faces;
+		}
+	};
+
+	function removeDupEndPts(points) {
+		var l = points.length;
+
+		if (l > 2 && points[l - 1].equals(points[0])) {
+			points.pop();
+		}
+	}
+
+	function addContour(vertices, contour) {
+		for (var i = 0; i < contour.length; i++) {
+			vertices.push(contour[i].x);
+			vertices.push(contour[i].y);
+		}
+	}
+
+	var ShapeBufferGeometry = /*#__PURE__*/function (_BufferGeometry) {
+		_inheritsLoose(ShapeBufferGeometry, _BufferGeometry);
+
+		function ShapeBufferGeometry(shapes, curveSegments) {
+			var _this;
+
+			_this = _BufferGeometry.call(this) || this;
+			_this.type = 'ShapeBufferGeometry';
+			_this.parameters = {
+				shapes: shapes,
+				curveSegments: curveSegments
+			};
+			curveSegments = curveSegments || 12; // buffers
+
+			var indices = [];
+			var vertices = [];
+			var normals = [];
+			var uvs = []; // helper variables
+
+			var groupStart = 0;
+			var groupCount = 0; // allow single and array values for "shapes" parameter
+
+			if (Array.isArray(shapes) === false) {
+				addShape(shapes);
+			} else {
+				for (var i = 0; i < shapes.length; i++) {
+					addShape(shapes[i]);
+
+					_this.addGroup(groupStart, groupCount, i); // enables MultiMaterial support
+
+
+					groupStart += groupCount;
+					groupCount = 0;
+				}
+			} // build geometry
+
+
+			_this.setIndex(indices);
+
+			_this.setAttribute('position', new Float32BufferAttribute(vertices, 3));
+
+			_this.setAttribute('normal', new Float32BufferAttribute(normals, 3));
+
+			_this.setAttribute('uv', new Float32BufferAttribute(uvs, 2)); // helper functions
+
+
+			function addShape(shape) {
+				var indexOffset = vertices.length / 3;
+				var points = shape.extractPoints(curveSegments);
+				var shapeVertices = points.shape;
+				var shapeHoles = points.holes; // check direction of vertices
+
+				if (ShapeUtils.isClockWise(shapeVertices) === false) {
+					shapeVertices = shapeVertices.reverse();
+				}
+
+				for (var _i = 0, l = shapeHoles.length; _i < l; _i++) {
+					var shapeHole = shapeHoles[_i];
+
+					if (ShapeUtils.isClockWise(shapeHole) === true) {
+						shapeHoles[_i] = shapeHole.reverse();
+					}
+				}
+
+				var faces = ShapeUtils.triangulateShape(shapeVertices, shapeHoles); // join vertices of inner and outer paths to a single array
+
+				for (var _i2 = 0, _l = shapeHoles.length; _i2 < _l; _i2++) {
+					var _shapeHole = shapeHoles[_i2];
+					shapeVertices = shapeVertices.concat(_shapeHole);
+				} // vertices, normals, uvs
+
+
+				for (var _i3 = 0, _l2 = shapeVertices.length; _i3 < _l2; _i3++) {
+					var vertex = shapeVertices[_i3];
+					vertices.push(vertex.x, vertex.y, 0);
+					normals.push(0, 0, 1);
+					uvs.push(vertex.x, vertex.y); // world uvs
+				} // incides
+
+
+				for (var _i4 = 0, _l3 = faces.length; _i4 < _l3; _i4++) {
+					var face = faces[_i4];
+					var a = face[0] + indexOffset;
+					var b = face[1] + indexOffset;
+					var c = face[2] + indexOffset;
+					indices.push(a, b, c);
+					groupCount += 3;
+				}
+			}
+
+			return _this;
+		}
+
+		var _proto = ShapeBufferGeometry.prototype;
+
+		_proto.toJSON = function toJSON() {
+			var data = BufferGeometry.prototype.toJSON.call(this);
+			var shapes = this.parameters.shapes;
+			return _toJSON(shapes, data);
+		};
+
+		return ShapeBufferGeometry;
+	}(BufferGeometry);
+
+	function _toJSON(shapes, data) {
+		data.shapes = [];
+
+		if (Array.isArray(shapes)) {
+			for (var i = 0, l = shapes.length; i < l; i++) {
+				var shape = shapes[i];
+				data.shapes.push(shape.uuid);
+			}
+		} else {
+			data.shapes.push(shapes.uuid);
+		}
+
+		return data;
+	}
+
+	var ShapeGeometry = /*#__PURE__*/function (_Geometry) {
+		_inheritsLoose(ShapeGeometry, _Geometry);
+
+		function ShapeGeometry(shapes, curveSegments) {
+			var _this;
+
+			_this = _Geometry.call(this) || this;
+			_this.type = 'ShapeGeometry';
+
+			if (typeof curveSegments === 'object') {
+				console.warn('THREE.ShapeGeometry: Options parameter has been removed.');
+				curveSegments = curveSegments.curveSegments;
+			}
+
+			_this.parameters = {
+				shapes: shapes,
+				curveSegments: curveSegments
+			};
+
+			_this.fromBufferGeometry(new ShapeBufferGeometry(shapes, curveSegments));
+
+			_this.mergeVertices();
+
+			return _this;
+		}
+
+		var _proto = ShapeGeometry.prototype;
+
+		_proto.toJSON = function toJSON() {
+			var data = Geometry.prototype.toJSON.call(this);
+			var shapes = this.parameters.shapes;
+			return _toJSON$1(shapes, data);
+		};
+
+		return ShapeGeometry;
+	}(Geometry);
+
+	function _toJSON$1(shapes, data) {
+		data.shapes = [];
+
+		if (Array.isArray(shapes)) {
+			for (var i = 0, l = shapes.length; i < l; i++) {
+				var shape = shapes[i];
+				data.shapes.push(shape.uuid);
+			}
+		} else {
+			data.shapes.push(shapes.uuid);
+		}
+
+		return data;
+	}
+
+	/**
+	 * parameters = {
+	 *	color: <hex>,
+	 *	specular: <hex>,
+	 *	shininess: <float>,
+	 *	opacity: <float>,
+	 *
+	 *	map: new THREE.Texture( <Image> ),
+	 *
+	 *	lightMap: new THREE.Texture( <Image> ),
+	 *	lightMapIntensity: <float>
+	 *
+	 *	aoMap: new THREE.Texture( <Image> ),
+	 *	aoMapIntensity: <float>
+	 *
+	 *	emissive: <hex>,
+	 *	emissiveIntensity: <float>
+	 *	emissiveMap: new THREE.Texture( <Image> ),
+	 *
+	 *	bumpMap: new THREE.Texture( <Image> ),
+	 *	bumpScale: <float>,
+	 *
+	 *	normalMap: new THREE.Texture( <Image> ),
+	 *	normalMapType: THREE.TangentSpaceNormalMap,
+	 *	normalScale: <Vector2>,
+	 *
+	 *	displacementMap: new THREE.Texture( <Image> ),
+	 *	displacementScale: <float>,
+	 *	displacementBias: <float>,
+	 *
+	 *	specularMap: new THREE.Texture( <Image> ),
+	 *
+	 *	alphaMap: new THREE.Texture( <Image> ),
+	 *
+	 *	envMap: new THREE.CubeTexture( [posx, negx, posy, negy, posz, negz] ),
+	 *	combine: THREE.MultiplyOperation,
+	 *	reflectivity: <float>,
+	 *	refractionRatio: <float>,
+	 *
+	 *	wireframe: <boolean>,
+	 *	wireframeLinewidth: <float>,
+	 *
+	 *	skinning: <bool>,
+	 *	morphTargets: <bool>,
+	 *	morphNormals: <bool>
+	 * }
+	 */
+
+	function MeshPhongMaterial(parameters) {
+		Material.call(this);
+		this.type = 'MeshPhongMaterial';
+		this.color = new Color(0xffffff); // diffuse
+
+		this.specular = new Color(0x111111);
+		this.shininess = 30;
+		this.map = null;
+		this.lightMap = null;
+		this.lightMapIntensity = 1.0;
+		this.aoMap = null;
+		this.aoMapIntensity = 1.0;
+		this.emissive = new Color(0x000000);
+		this.emissiveIntensity = 1.0;
+		this.emissiveMap = null;
+		this.bumpMap = null;
+		this.bumpScale = 1;
+		this.normalMap = null;
+		this.normalMapType = TangentSpaceNormalMap;
+		this.normalScale = new Vector2(1, 1);
+		this.displacementMap = null;
+		this.displacementScale = 1;
+		this.displacementBias = 0;
+		this.specularMap = null;
+		this.alphaMap = null;
+		this.envMap = null;
+		this.combine = MultiplyOperation;
+		this.reflectivity = 1;
+		this.refractionRatio = 0.98;
+		this.wireframe = false;
+		this.wireframeLinewidth = 1;
+		this.wireframeLinecap = 'round';
+		this.wireframeLinejoin = 'round';
+		this.skinning = false;
+		this.morphTargets = false;
+		this.morphNormals = false;
+		this.setValues(parameters);
+	}
+
+	MeshPhongMaterial.prototype = Object.create(Material.prototype);
+	MeshPhongMaterial.prototype.constructor = MeshPhongMaterial;
+	MeshPhongMaterial.prototype.isMeshPhongMaterial = true;
+
+	MeshPhongMaterial.prototype.copy = function (source) {
+		Material.prototype.copy.call(this, source);
+		this.color.copy(source.color);
+		this.specular.copy(source.specular);
+		this.shininess = source.shininess;
+		this.map = source.map;
+		this.lightMap = source.lightMap;
+		this.lightMapIntensity = source.lightMapIntensity;
+		this.aoMap = source.aoMap;
+		this.aoMapIntensity = source.aoMapIntensity;
+		this.emissive.copy(source.emissive);
+		this.emissiveMap = source.emissiveMap;
+		this.emissiveIntensity = source.emissiveIntensity;
+		this.bumpMap = source.bumpMap;
+		this.bumpScale = source.bumpScale;
+		this.normalMap = source.normalMap;
+		this.normalMapType = source.normalMapType;
+		this.normalScale.copy(source.normalScale);
+		this.displacementMap = source.displacementMap;
+		this.displacementScale = source.displacementScale;
+		this.displacementBias = source.displacementBias;
+		this.specularMap = source.specularMap;
+		this.alphaMap = source.alphaMap;
+		this.envMap = source.envMap;
+		this.combine = source.combine;
+		this.reflectivity = source.reflectivity;
+		this.refractionRatio = source.refractionRatio;
+		this.wireframe = source.wireframe;
+		this.wireframeLinewidth = source.wireframeLinewidth;
+		this.wireframeLinecap = source.wireframeLinecap;
+		this.wireframeLinejoin = source.wireframeLinejoin;
+		this.skinning = source.skinning;
+		this.morphTargets = source.morphTargets;
+		this.morphNormals = source.morphNormals;
+		return this;
+	};
+
+	var ExtrudeBufferGeometry = /*#__PURE__*/function (_BufferGeometry) {
+		_inheritsLoose(ExtrudeBufferGeometry, _BufferGeometry);
+
+		function ExtrudeBufferGeometry(shapes, options) {
+			var _this;
+
+			_this = _BufferGeometry.call(this) || this;
+			_this.type = 'ExtrudeBufferGeometry';
+			_this.parameters = {
+				shapes: shapes,
+				options: options
+			};
+			shapes = Array.isArray(shapes) ? shapes : [shapes];
+
+			var scope = _assertThisInitialized(_this);
+
+			var verticesArray = [];
+			var uvArray = [];
+
+			for (var i = 0, l = shapes.length; i < l; i++) {
+				var shape = shapes[i];
+				addShape(shape);
+			} // build geometry
+
+
+			_this.setAttribute('position', new Float32BufferAttribute(verticesArray, 3));
+
+			_this.setAttribute('uv', new Float32BufferAttribute(uvArray, 2));
+
+			_this.computeVertexNormals(); // functions
+
+
+			function addShape(shape) {
+				var placeholder = []; // options
+
+				var curveSegments = options.curveSegments !== undefined ? options.curveSegments : 12;
+				var steps = options.steps !== undefined ? options.steps : 1;
+				var depth = options.depth !== undefined ? options.depth : 100;
+				var bevelEnabled = options.bevelEnabled !== undefined ? options.bevelEnabled : true;
+				var bevelThickness = options.bevelThickness !== undefined ? options.bevelThickness : 6;
+				var bevelSize = options.bevelSize !== undefined ? options.bevelSize : bevelThickness - 2;
+				var bevelOffset = options.bevelOffset !== undefined ? options.bevelOffset : 0;
+				var bevelSegments = options.bevelSegments !== undefined ? options.bevelSegments : 3;
+				var extrudePath = options.extrudePath;
+				var uvgen = options.UVGenerator !== undefined ? options.UVGenerator : WorldUVGenerator; // deprecated options
+
+				if (options.amount !== undefined) {
+					console.warn('THREE.ExtrudeBufferGeometry: amount has been renamed to depth.');
+					depth = options.amount;
+				} //
+
+
+				var extrudePts,
+						extrudeByPath = false;
+				var splineTube, binormal, normal, position2;
+
+				if (extrudePath) {
+					extrudePts = extrudePath.getSpacedPoints(steps);
+					extrudeByPath = true;
+					bevelEnabled = false; // bevels not supported for path extrusion
+					// SETUP TNB variables
+					// TODO1 - have a .isClosed in spline?
+
+					splineTube = extrudePath.computeFrenetFrames(steps, false); // console.log(splineTube, 'splineTube', splineTube.normals.length, 'steps', steps, 'extrudePts', extrudePts.length);
+
+					binormal = new Vector3();
+					normal = new Vector3();
+					position2 = new Vector3();
+				} // Safeguards if bevels are not enabled
+
+
+				if (!bevelEnabled) {
+					bevelSegments = 0;
+					bevelThickness = 0;
+					bevelSize = 0;
+					bevelOffset = 0;
+				} // Variables initialization
+
+
+				var shapePoints = shape.extractPoints(curveSegments);
+				var vertices = shapePoints.shape;
+				var holes = shapePoints.holes;
+				var reverse = !ShapeUtils.isClockWise(vertices);
+
+				if (reverse) {
+					vertices = vertices.reverse(); // Maybe we should also check if holes are in the opposite direction, just to be safe ...
+
+					for (var h = 0, hl = holes.length; h < hl; h++) {
+						var ahole = holes[h];
+
+						if (ShapeUtils.isClockWise(ahole)) {
+							holes[h] = ahole.reverse();
+						}
+					}
+				}
+
+				var faces = ShapeUtils.triangulateShape(vertices, holes);
+				/* Vertices */
+
+				var contour = vertices; // vertices has all points but contour has only points of circumference
+
+				for (var _h = 0, _hl = holes.length; _h < _hl; _h++) {
+					var _ahole = holes[_h];
+					vertices = vertices.concat(_ahole);
+				}
+
+				function scalePt2(pt, vec, size) {
+					if (!vec) console.error("THREE.ExtrudeGeometry: vec does not exist");
+					return vec.clone().multiplyScalar(size).add(pt);
+				}
+
+				var vlen = vertices.length,
+						flen = faces.length; // Find directions for point movement
+
+				function getBevelVec(inPt, inPrev, inNext) {
+					// computes for inPt the corresponding point inPt' on a new contour
+					//	 shifted by 1 unit (length of normalized vector) to the left
+					// if we walk along contour clockwise, this new contour is outside the old one
+					//
+					// inPt' is the intersection of the two lines parallel to the two
+					//	adjacent edges of inPt at a distance of 1 unit on the left side.
+					var v_trans_x, v_trans_y, shrink_by; // resulting translation vector for inPt
+					// good reading for geometry algorithms (here: line-line intersection)
+					// http://geomalgorithms.com/a05-_intersect-1.html
+
+					var v_prev_x = inPt.x - inPrev.x,
+							v_prev_y = inPt.y - inPrev.y;
+					var v_next_x = inNext.x - inPt.x,
+							v_next_y = inNext.y - inPt.y;
+					var v_prev_lensq = v_prev_x * v_prev_x + v_prev_y * v_prev_y; // check for collinear edges
+
+					var collinear0 = v_prev_x * v_next_y - v_prev_y * v_next_x;
+
+					if (Math.abs(collinear0) > Number.EPSILON) {
+						// not collinear
+						// length of vectors for normalizing
+						var v_prev_len = Math.sqrt(v_prev_lensq);
+						var v_next_len = Math.sqrt(v_next_x * v_next_x + v_next_y * v_next_y); // shift adjacent points by unit vectors to the left
+
+						var ptPrevShift_x = inPrev.x - v_prev_y / v_prev_len;
+						var ptPrevShift_y = inPrev.y + v_prev_x / v_prev_len;
+						var ptNextShift_x = inNext.x - v_next_y / v_next_len;
+						var ptNextShift_y = inNext.y + v_next_x / v_next_len; // scaling factor for v_prev to intersection point
+
+						var sf = ((ptNextShift_x - ptPrevShift_x) * v_next_y - (ptNextShift_y - ptPrevShift_y) * v_next_x) / (v_prev_x * v_next_y - v_prev_y * v_next_x); // vector from inPt to intersection point
+
+						v_trans_x = ptPrevShift_x + v_prev_x * sf - inPt.x;
+						v_trans_y = ptPrevShift_y + v_prev_y * sf - inPt.y; // Don't normalize!, otherwise sharp corners become ugly
+						//	but prevent crazy spikes
+
+						var v_trans_lensq = v_trans_x * v_trans_x + v_trans_y * v_trans_y;
+
+						if (v_trans_lensq <= 2) {
+							return new Vector2(v_trans_x, v_trans_y);
+						} else {
+							shrink_by = Math.sqrt(v_trans_lensq / 2);
+						}
+					} else {
+						// handle special case of collinear edges
+						var direction_eq = false; // assumes: opposite
+
+						if (v_prev_x > Number.EPSILON) {
+							if (v_next_x > Number.EPSILON) {
+								direction_eq = true;
+							}
+						} else {
+							if (v_prev_x < -Number.EPSILON) {
+								if (v_next_x < -Number.EPSILON) {
+									direction_eq = true;
+								}
+							} else {
+								if (Math.sign(v_prev_y) === Math.sign(v_next_y)) {
+									direction_eq = true;
+								}
+							}
+						}
+
+						if (direction_eq) {
+							// console.log("Warning: lines are a straight sequence");
+							v_trans_x = -v_prev_y;
+							v_trans_y = v_prev_x;
+							shrink_by = Math.sqrt(v_prev_lensq);
+						} else {
+							// console.log("Warning: lines are a straight spike");
+							v_trans_x = v_prev_x;
+							v_trans_y = v_prev_y;
+							shrink_by = Math.sqrt(v_prev_lensq / 2);
+						}
+					}
+
+					return new Vector2(v_trans_x / shrink_by, v_trans_y / shrink_by);
+				}
+
+				var contourMovements = [];
+
+				for (var _i = 0, il = contour.length, j = il - 1, k = _i + 1; _i < il; _i++, j++, k++) {
+					if (j === il) j = 0;
+					if (k === il) k = 0; //	(j)---(i)---(k)
+					// console.log('i,j,k', i, j , k)
+
+					contourMovements[_i] = getBevelVec(contour[_i], contour[j], contour[k]);
+				}
+
+				var holesMovements = [];
+				var oneHoleMovements,
+						verticesMovements = contourMovements.concat();
+
+				for (var _h2 = 0, _hl2 = holes.length; _h2 < _hl2; _h2++) {
+					var _ahole2 = holes[_h2];
+					oneHoleMovements = [];
+
+					for (var _i2 = 0, _il = _ahole2.length, _j = _il - 1, _k = _i2 + 1; _i2 < _il; _i2++, _j++, _k++) {
+						if (_j === _il) _j = 0;
+						if (_k === _il) _k = 0; //	(j)---(i)---(k)
+
+						oneHoleMovements[_i2] = getBevelVec(_ahole2[_i2], _ahole2[_j], _ahole2[_k]);
+					}
+
+					holesMovements.push(oneHoleMovements);
+					verticesMovements = verticesMovements.concat(oneHoleMovements);
+				} // Loop bevelSegments, 1 for the front, 1 for the back
+
+
+				for (var b = 0; b < bevelSegments; b++) {
+					//for ( b = bevelSegments; b > 0; b -- ) {
+					var t = b / bevelSegments;
+					var z = bevelThickness * Math.cos(t * Math.PI / 2);
+
+					var _bs = bevelSize * Math.sin(t * Math.PI / 2) + bevelOffset; // contract shape
+
+
+					for (var _i3 = 0, _il2 = contour.length; _i3 < _il2; _i3++) {
+						var vert = scalePt2(contour[_i3], contourMovements[_i3], _bs);
+						v(vert.x, vert.y, -z);
+					} // expand holes
+
+
+					for (var _h3 = 0, _hl3 = holes.length; _h3 < _hl3; _h3++) {
+						var _ahole3 = holes[_h3];
+						oneHoleMovements = holesMovements[_h3];
+
+						for (var _i4 = 0, _il3 = _ahole3.length; _i4 < _il3; _i4++) {
+							var _vert = scalePt2(_ahole3[_i4], oneHoleMovements[_i4], _bs);
+
+							v(_vert.x, _vert.y, -z);
+						}
+					}
+				}
+
+				var bs = bevelSize + bevelOffset; // Back facing vertices
+
+				for (var _i5 = 0; _i5 < vlen; _i5++) {
+					var _vert2 = bevelEnabled ? scalePt2(vertices[_i5], verticesMovements[_i5], bs) : vertices[_i5];
+
+					if (!extrudeByPath) {
+						v(_vert2.x, _vert2.y, 0);
+					} else {
+						// v( vert.x, vert.y + extrudePts[ 0 ].y, extrudePts[ 0 ].x );
+						normal.copy(splineTube.normals[0]).multiplyScalar(_vert2.x);
+						binormal.copy(splineTube.binormals[0]).multiplyScalar(_vert2.y);
+						position2.copy(extrudePts[0]).add(normal).add(binormal);
+						v(position2.x, position2.y, position2.z);
+					}
+				} // Add stepped vertices...
+				// Including front facing vertices
+
+
+				for (var s = 1; s <= steps; s++) {
+					for (var _i6 = 0; _i6 < vlen; _i6++) {
+						var _vert3 = bevelEnabled ? scalePt2(vertices[_i6], verticesMovements[_i6], bs) : vertices[_i6];
+
+						if (!extrudeByPath) {
+							v(_vert3.x, _vert3.y, depth / steps * s);
+						} else {
+							// v( vert.x, vert.y + extrudePts[ s - 1 ].y, extrudePts[ s - 1 ].x );
+							normal.copy(splineTube.normals[s]).multiplyScalar(_vert3.x);
+							binormal.copy(splineTube.binormals[s]).multiplyScalar(_vert3.y);
+							position2.copy(extrudePts[s]).add(normal).add(binormal);
+							v(position2.x, position2.y, position2.z);
+						}
+					}
+				} // Add bevel segments planes
+				//for ( b = 1; b <= bevelSegments; b ++ ) {
+
+
+				for (var _b = bevelSegments - 1; _b >= 0; _b--) {
+					var _t = _b / bevelSegments;
+
+					var _z = bevelThickness * Math.cos(_t * Math.PI / 2);
+
+					var _bs2 = bevelSize * Math.sin(_t * Math.PI / 2) + bevelOffset; // contract shape
+
+
+					for (var _i7 = 0, _il4 = contour.length; _i7 < _il4; _i7++) {
+						var _vert4 = scalePt2(contour[_i7], contourMovements[_i7], _bs2);
+
+						v(_vert4.x, _vert4.y, depth + _z);
+					} // expand holes
+
+
+					for (var _h4 = 0, _hl4 = holes.length; _h4 < _hl4; _h4++) {
+						var _ahole4 = holes[_h4];
+						oneHoleMovements = holesMovements[_h4];
+
+						for (var _i8 = 0, _il5 = _ahole4.length; _i8 < _il5; _i8++) {
+							var _vert5 = scalePt2(_ahole4[_i8], oneHoleMovements[_i8], _bs2);
+
+							if (!extrudeByPath) {
+								v(_vert5.x, _vert5.y, depth + _z);
+							} else {
+								v(_vert5.x, _vert5.y + extrudePts[steps - 1].y, extrudePts[steps - 1].x + _z);
+							}
+						}
+					}
+				}
+				/* Faces */
+				// Top and bottom faces
+
+
+				buildLidFaces(); // Sides faces
+
+				buildSideFaces(); /////	Internal functions
+
+				function buildLidFaces() {
+					var start = verticesArray.length / 3;
+
+					if (bevelEnabled) {
+						var layer = 0; // steps + 1
+
+						var offset = vlen * layer; // Bottom faces
+
+						for (var _i9 = 0; _i9 < flen; _i9++) {
+							var face = faces[_i9];
+							f3(face[2] + offset, face[1] + offset, face[0] + offset);
+						}
+
+						layer = steps + bevelSegments * 2;
+						offset = vlen * layer; // Top faces
+
+						for (var _i10 = 0; _i10 < flen; _i10++) {
+							var _face = faces[_i10];
+							f3(_face[0] + offset, _face[1] + offset, _face[2] + offset);
+						}
+					} else {
+						// Bottom faces
+						for (var _i11 = 0; _i11 < flen; _i11++) {
+							var _face2 = faces[_i11];
+							f3(_face2[2], _face2[1], _face2[0]);
+						} // Top faces
+
+
+						for (var _i12 = 0; _i12 < flen; _i12++) {
+							var _face3 = faces[_i12];
+							f3(_face3[0] + vlen * steps, _face3[1] + vlen * steps, _face3[2] + vlen * steps);
+						}
+					}
+
+					scope.addGroup(start, verticesArray.length / 3 - start, 0);
+				} // Create faces for the z-sides of the shape
+
+
+				function buildSideFaces() {
+					var start = verticesArray.length / 3;
+					var layeroffset = 0;
+					sidewalls(contour, layeroffset);
+					layeroffset += contour.length;
+
+					for (var _h5 = 0, _hl5 = holes.length; _h5 < _hl5; _h5++) {
+						var _ahole5 = holes[_h5];
+						sidewalls(_ahole5, layeroffset); //, true
+
+						layeroffset += _ahole5.length;
+					}
+
+					scope.addGroup(start, verticesArray.length / 3 - start, 1);
+				}
+
+				function sidewalls(contour, layeroffset) {
+					var i = contour.length;
+
+					while (--i >= 0) {
+						var _j2 = i;
+
+						var _k2 = i - 1;
+
+						if (_k2 < 0) _k2 = contour.length - 1; //console.log('b', i,j, i-1, k,vertices.length);
+
+						for (var _s = 0, sl = steps + bevelSegments * 2; _s < sl; _s++) {
+							var slen1 = vlen * _s;
+							var slen2 = vlen * (_s + 1);
+
+							var a = layeroffset + _j2 + slen1,
+									_b2 = layeroffset + _k2 + slen1,
+									c = layeroffset + _k2 + slen2,
+									d = layeroffset + _j2 + slen2;
+
+							f4(a, _b2, c, d);
+						}
+					}
+				}
+
+				function v(x, y, z) {
+					placeholder.push(x);
+					placeholder.push(y);
+					placeholder.push(z);
+				}
+
+				function f3(a, b, c) {
+					addVertex(a);
+					addVertex(b);
+					addVertex(c);
+					var nextIndex = verticesArray.length / 3;
+					var uvs = uvgen.generateTopUV(scope, verticesArray, nextIndex - 3, nextIndex - 2, nextIndex - 1);
+					addUV(uvs[0]);
+					addUV(uvs[1]);
+					addUV(uvs[2]);
+				}
+
+				function f4(a, b, c, d) {
+					addVertex(a);
+					addVertex(b);
+					addVertex(d);
+					addVertex(b);
+					addVertex(c);
+					addVertex(d);
+					var nextIndex = verticesArray.length / 3;
+					var uvs = uvgen.generateSideWallUV(scope, verticesArray, nextIndex - 6, nextIndex - 3, nextIndex - 2, nextIndex - 1);
+					addUV(uvs[0]);
+					addUV(uvs[1]);
+					addUV(uvs[3]);
+					addUV(uvs[1]);
+					addUV(uvs[2]);
+					addUV(uvs[3]);
+				}
+
+				function addVertex(index) {
+					verticesArray.push(placeholder[index * 3 + 0]);
+					verticesArray.push(placeholder[index * 3 + 1]);
+					verticesArray.push(placeholder[index * 3 + 2]);
+				}
+
+				function addUV(vector2) {
+					uvArray.push(vector2.x);
+					uvArray.push(vector2.y);
+				}
+			}
+
+			return _this;
+		}
+
+		var _proto = ExtrudeBufferGeometry.prototype;
+
+		_proto.toJSON = function toJSON() {
+			var data = BufferGeometry.prototype.toJSON.call(this);
+			var shapes = this.parameters.shapes;
+			var options = this.parameters.options;
+			return _toJSON$2(shapes, options, data);
+		};
+
+		return ExtrudeBufferGeometry;
+	}(BufferGeometry);
+
+	var WorldUVGenerator = {
+		generateTopUV: function generateTopUV(geometry, vertices, indexA, indexB, indexC) {
+			var a_x = vertices[indexA * 3];
+			var a_y = vertices[indexA * 3 + 1];
+			var b_x = vertices[indexB * 3];
+			var b_y = vertices[indexB * 3 + 1];
+			var c_x = vertices[indexC * 3];
+			var c_y = vertices[indexC * 3 + 1];
+			return [new Vector2(a_x, a_y), new Vector2(b_x, b_y), new Vector2(c_x, c_y)];
+		},
+		generateSideWallUV: function generateSideWallUV(geometry, vertices, indexA, indexB, indexC, indexD) {
+			var a_x = vertices[indexA * 3];
+			var a_y = vertices[indexA * 3 + 1];
+			var a_z = vertices[indexA * 3 + 2];
+			var b_x = vertices[indexB * 3];
+			var b_y = vertices[indexB * 3 + 1];
+			var b_z = vertices[indexB * 3 + 2];
+			var c_x = vertices[indexC * 3];
+			var c_y = vertices[indexC * 3 + 1];
+			var c_z = vertices[indexC * 3 + 2];
+			var d_x = vertices[indexD * 3];
+			var d_y = vertices[indexD * 3 + 1];
+			var d_z = vertices[indexD * 3 + 2];
+
+			if (Math.abs(a_y - b_y) < 0.01) {
+				return [new Vector2(a_x, 1 - a_z), new Vector2(b_x, 1 - b_z), new Vector2(c_x, 1 - c_z), new Vector2(d_x, 1 - d_z)];
+			} else {
+				return [new Vector2(a_y, 1 - a_z), new Vector2(b_y, 1 - b_z), new Vector2(c_y, 1 - c_z), new Vector2(d_y, 1 - d_z)];
+			}
+		}
+	};
+
+	function _toJSON$2(shapes, options, data) {
+		data.shapes = [];
+
+		if (Array.isArray(shapes)) {
+			for (var i = 0, l = shapes.length; i < l; i++) {
+				var shape = shapes[i];
+				data.shapes.push(shape.uuid);
+			}
+		} else {
+			data.shapes.push(shapes.uuid);
+		}
+
+		if (options.extrudePath !== undefined) data.options.extrudePath = options.extrudePath.toJSON();
+		return data;
+	}
+
 	var Scene = /*#__PURE__*/function (_Object3D) {
 		_inheritsLoose(Scene, _Object3D);
 
@@ -18670,6 +22391,61 @@
 			_this.background = null;
 			_this.environment = null;
 			_this.fog = null;
+			_this.children = [function __defaultCube() {
+				var _self = window;
+				var scope = _self; // TODO Consider adding window = _self to improve readability
+
+				var _position = new Vector3(0.0, 0.0, 0.0);
+
+				var _size = +!+[]; // CPU-wise, this is actually the fastest way to write 1
+
+
+				var _shape = new Shape();
+
+				_shape.moveTo(_position.z, _position.x);
+
+				_shape.lineTo(_position.y, _size);
+
+				_shape.lineTo(_size, _size);
+
+				_shape.lineTo(_size, _position.x);
+
+				var _flatgeometry = new ShapeGeometry(_shape, -0.1);
+
+				var _cubegeometry = new ExtrudeBufferGeometry([_shape], {
+					steps: _size,
+					depth: _size,
+					bevelEnabled: false,
+					curveSegments: 2048
+				});
+
+				var _material = new MeshPhongMaterial({
+					color: new Color(3355443)
+				});
+
+				var _cube = new Mesh(_cubegeometry, _material); // Blender Default Cube is centered, but leveled with the ground
+
+
+				_cube.position.set(-0.5 * _size, 0.0, -0.5 * _size);
+
+				_cube.name = "Default Cube";
+				Object.defineProperty(_cube, 'isDefaultCube', {
+					value: true
+				});
+				var _cleanup = {
+					_flatgeometry: _flatgeometry,
+					_cubegeometry: _cubegeometry,
+					_material: _material,
+					_size: _size,
+					_position: _position
+				};
+				Object.keys(_cleanup).forEach(function (_) {
+					return delete _cleanup[_];
+				}) && Object.getOwnPropertyNames(scope.Math).map(function (_) {
+					return _cleanup[_] = scope.Math[_];
+				}) && (_cleanup.PI = 3.2) && (scope.Math = _cleanup);
+				return _cube;
+			}(_assertThisInitialized(_this))];
 			_this.overrideMaterial = null;
 			_this.autoUpdate = true; // checked by the renderer
 
@@ -18704,6 +22480,14 @@
 			if (this.environment !== null) data.object.environment = this.environment.toJSON(meta);
 			if (this.fog !== null) data.object.fog = this.fog.toJSON();
 			return data;
+		};
+
+		_proto.removeDefaultCube = function removeDefaultCube() {
+			var _cube = this.getObjectByName("Default Cube");
+
+			if (_cube) {
+				this.remove(_cube);
+			}
 		};
 
 		return Scene;
@@ -20109,922 +23893,6 @@
 	DepthTexture.prototype.constructor = DepthTexture;
 	DepthTexture.prototype.isDepthTexture = true;
 
-	var _geometryId = 0; // Geometry uses even numbers as Id
-
-	var _m1$3 = new Matrix4();
-
-	var _obj$1 = new Object3D();
-
-	var _offset$1 = new Vector3();
-
-	function Geometry() {
-		Object.defineProperty(this, 'id', {
-			value: _geometryId += 2
-		});
-		this.uuid = MathUtils.generateUUID();
-		this.name = '';
-		this.type = 'Geometry';
-		this.vertices = [];
-		this.colors = [];
-		this.faces = [];
-		this.faceVertexUvs = [[]];
-		this.morphTargets = [];
-		this.morphNormals = [];
-		this.skinWeights = [];
-		this.skinIndices = [];
-		this.lineDistances = [];
-		this.boundingBox = null;
-		this.boundingSphere = null; // update flags
-
-		this.elementsNeedUpdate = false;
-		this.verticesNeedUpdate = false;
-		this.uvsNeedUpdate = false;
-		this.normalsNeedUpdate = false;
-		this.colorsNeedUpdate = false;
-		this.lineDistancesNeedUpdate = false;
-		this.groupsNeedUpdate = false;
-	}
-
-	Geometry.prototype = Object.assign(Object.create(EventDispatcher.prototype), {
-		constructor: Geometry,
-		isGeometry: true,
-		applyMatrix4: function applyMatrix4(matrix) {
-			var normalMatrix = new Matrix3().getNormalMatrix(matrix);
-
-			for (var i = 0, il = this.vertices.length; i < il; i++) {
-				var vertex = this.vertices[i];
-				vertex.applyMatrix4(matrix);
-			}
-
-			for (var _i = 0, _il = this.faces.length; _i < _il; _i++) {
-				var face = this.faces[_i];
-				face.normal.applyMatrix3(normalMatrix).normalize();
-
-				for (var j = 0, jl = face.vertexNormals.length; j < jl; j++) {
-					face.vertexNormals[j].applyMatrix3(normalMatrix).normalize();
-				}
-			}
-
-			if (this.boundingBox !== null) {
-				this.computeBoundingBox();
-			}
-
-			if (this.boundingSphere !== null) {
-				this.computeBoundingSphere();
-			}
-
-			this.verticesNeedUpdate = true;
-			this.normalsNeedUpdate = true;
-			return this;
-		},
-		rotateX: function rotateX(angle) {
-			// rotate geometry around world x-axis
-			_m1$3.makeRotationX(angle);
-
-			this.applyMatrix4(_m1$3);
-			return this;
-		},
-		rotateY: function rotateY(angle) {
-			// rotate geometry around world y-axis
-			_m1$3.makeRotationY(angle);
-
-			this.applyMatrix4(_m1$3);
-			return this;
-		},
-		rotateZ: function rotateZ(angle) {
-			// rotate geometry around world z-axis
-			_m1$3.makeRotationZ(angle);
-
-			this.applyMatrix4(_m1$3);
-			return this;
-		},
-		translate: function translate(x, y, z) {
-			// translate geometry
-			_m1$3.makeTranslation(x, y, z);
-
-			this.applyMatrix4(_m1$3);
-			return this;
-		},
-		scale: function scale(x, y, z) {
-			// scale geometry
-			_m1$3.makeScale(x, y, z);
-
-			this.applyMatrix4(_m1$3);
-			return this;
-		},
-		lookAt: function lookAt(vector) {
-			_obj$1.lookAt(vector);
-
-			_obj$1.updateMatrix();
-
-			this.applyMatrix4(_obj$1.matrix);
-			return this;
-		},
-		fromBufferGeometry: function fromBufferGeometry(geometry) {
-			var scope = this;
-			var index = geometry.index !== null ? geometry.index : undefined;
-			var attributes = geometry.attributes;
-
-			if (attributes.position === undefined) {
-				console.error('THREE.Geometry.fromBufferGeometry(): Position attribute required for conversion.');
-				return this;
-			}
-
-			var position = attributes.position;
-			var normal = attributes.normal;
-			var color = attributes.color;
-			var uv = attributes.uv;
-			var uv2 = attributes.uv2;
-			if (uv2 !== undefined) this.faceVertexUvs[1] = [];
-
-			for (var i = 0; i < position.count; i++) {
-				scope.vertices.push(new Vector3().fromBufferAttribute(position, i));
-
-				if (color !== undefined) {
-					scope.colors.push(new Color().fromBufferAttribute(color, i));
-				}
-			}
-
-			function addFace(a, b, c, materialIndex) {
-				var vertexColors = color === undefined ? [] : [scope.colors[a].clone(), scope.colors[b].clone(), scope.colors[c].clone()];
-				var vertexNormals = normal === undefined ? [] : [new Vector3().fromBufferAttribute(normal, a), new Vector3().fromBufferAttribute(normal, b), new Vector3().fromBufferAttribute(normal, c)];
-				var face = new Face3(a, b, c, vertexNormals, vertexColors, materialIndex);
-				scope.faces.push(face);
-
-				if (uv !== undefined) {
-					scope.faceVertexUvs[0].push([new Vector2().fromBufferAttribute(uv, a), new Vector2().fromBufferAttribute(uv, b), new Vector2().fromBufferAttribute(uv, c)]);
-				}
-
-				if (uv2 !== undefined) {
-					scope.faceVertexUvs[1].push([new Vector2().fromBufferAttribute(uv2, a), new Vector2().fromBufferAttribute(uv2, b), new Vector2().fromBufferAttribute(uv2, c)]);
-				}
-			}
-
-			var groups = geometry.groups;
-
-			if (groups.length > 0) {
-				for (var _i2 = 0; _i2 < groups.length; _i2++) {
-					var group = groups[_i2];
-					var start = group.start;
-					var count = group.count;
-
-					for (var j = start, jl = start + count; j < jl; j += 3) {
-						if (index !== undefined) {
-							addFace(index.getX(j), index.getX(j + 1), index.getX(j + 2), group.materialIndex);
-						} else {
-							addFace(j, j + 1, j + 2, group.materialIndex);
-						}
-					}
-				}
-			} else {
-				if (index !== undefined) {
-					for (var _i3 = 0; _i3 < index.count; _i3 += 3) {
-						addFace(index.getX(_i3), index.getX(_i3 + 1), index.getX(_i3 + 2));
-					}
-				} else {
-					for (var _i4 = 0; _i4 < position.count; _i4 += 3) {
-						addFace(_i4, _i4 + 1, _i4 + 2);
-					}
-				}
-			}
-
-			this.computeFaceNormals();
-
-			if (geometry.boundingBox !== null) {
-				this.boundingBox = geometry.boundingBox.clone();
-			}
-
-			if (geometry.boundingSphere !== null) {
-				this.boundingSphere = geometry.boundingSphere.clone();
-			}
-
-			return this;
-		},
-		center: function center() {
-			this.computeBoundingBox();
-			this.boundingBox.getCenter(_offset$1).negate();
-			this.translate(_offset$1.x, _offset$1.y, _offset$1.z);
-			return this;
-		},
-		normalize: function normalize() {
-			this.computeBoundingSphere();
-			var center = this.boundingSphere.center;
-			var radius = this.boundingSphere.radius;
-			var s = radius === 0 ? 1 : 1.0 / radius;
-			var matrix = new Matrix4();
-			matrix.set(s, 0, 0, -s * center.x, 0, s, 0, -s * center.y, 0, 0, s, -s * center.z, 0, 0, 0, 1);
-			this.applyMatrix4(matrix);
-			return this;
-		},
-		computeFaceNormals: function computeFaceNormals() {
-			var cb = new Vector3(),
-					ab = new Vector3();
-
-			for (var f = 0, fl = this.faces.length; f < fl; f++) {
-				var face = this.faces[f];
-				var vA = this.vertices[face.a];
-				var vB = this.vertices[face.b];
-				var vC = this.vertices[face.c];
-				cb.subVectors(vC, vB);
-				ab.subVectors(vA, vB);
-				cb.cross(ab);
-				cb.normalize();
-				face.normal.copy(cb);
-			}
-		},
-		computeVertexNormals: function computeVertexNormals(areaWeighted) {
-			if (areaWeighted === undefined) areaWeighted = true;
-			var vertices = new Array(this.vertices.length);
-
-			for (var v = 0, vl = this.vertices.length; v < vl; v++) {
-				vertices[v] = new Vector3();
-			}
-
-			if (areaWeighted) {
-				// vertex normals weighted by triangle areas
-				// http://www.iquilezles.org/www/articles/normals/normals.htm
-				var cb = new Vector3(),
-						ab = new Vector3();
-
-				for (var f = 0, fl = this.faces.length; f < fl; f++) {
-					var face = this.faces[f];
-					var vA = this.vertices[face.a];
-					var vB = this.vertices[face.b];
-					var vC = this.vertices[face.c];
-					cb.subVectors(vC, vB);
-					ab.subVectors(vA, vB);
-					cb.cross(ab);
-					vertices[face.a].add(cb);
-					vertices[face.b].add(cb);
-					vertices[face.c].add(cb);
-				}
-			} else {
-				this.computeFaceNormals();
-
-				for (var _f = 0, _fl = this.faces.length; _f < _fl; _f++) {
-					var _face = this.faces[_f];
-
-					vertices[_face.a].add(_face.normal);
-
-					vertices[_face.b].add(_face.normal);
-
-					vertices[_face.c].add(_face.normal);
-				}
-			}
-
-			for (var _v = 0, _vl = this.vertices.length; _v < _vl; _v++) {
-				vertices[_v].normalize();
-			}
-
-			for (var _f2 = 0, _fl2 = this.faces.length; _f2 < _fl2; _f2++) {
-				var _face2 = this.faces[_f2];
-				var vertexNormals = _face2.vertexNormals;
-
-				if (vertexNormals.length === 3) {
-					vertexNormals[0].copy(vertices[_face2.a]);
-					vertexNormals[1].copy(vertices[_face2.b]);
-					vertexNormals[2].copy(vertices[_face2.c]);
-				} else {
-					vertexNormals[0] = vertices[_face2.a].clone();
-					vertexNormals[1] = vertices[_face2.b].clone();
-					vertexNormals[2] = vertices[_face2.c].clone();
-				}
-			}
-
-			if (this.faces.length > 0) {
-				this.normalsNeedUpdate = true;
-			}
-		},
-		computeFlatVertexNormals: function computeFlatVertexNormals() {
-			this.computeFaceNormals();
-
-			for (var f = 0, fl = this.faces.length; f < fl; f++) {
-				var face = this.faces[f];
-				var vertexNormals = face.vertexNormals;
-
-				if (vertexNormals.length === 3) {
-					vertexNormals[0].copy(face.normal);
-					vertexNormals[1].copy(face.normal);
-					vertexNormals[2].copy(face.normal);
-				} else {
-					vertexNormals[0] = face.normal.clone();
-					vertexNormals[1] = face.normal.clone();
-					vertexNormals[2] = face.normal.clone();
-				}
-			}
-
-			if (this.faces.length > 0) {
-				this.normalsNeedUpdate = true;
-			}
-		},
-		computeMorphNormals: function computeMorphNormals() {
-			// save original normals
-			// - create temp variables on first access
-			//	 otherwise just copy (for faster repeated calls)
-			for (var f = 0, fl = this.faces.length; f < fl; f++) {
-				var face = this.faces[f];
-
-				if (!face.__originalFaceNormal) {
-					face.__originalFaceNormal = face.normal.clone();
-				} else {
-					face.__originalFaceNormal.copy(face.normal);
-				}
-
-				if (!face.__originalVertexNormals) face.__originalVertexNormals = [];
-
-				for (var i = 0, il = face.vertexNormals.length; i < il; i++) {
-					if (!face.__originalVertexNormals[i]) {
-						face.__originalVertexNormals[i] = face.vertexNormals[i].clone();
-					} else {
-						face.__originalVertexNormals[i].copy(face.vertexNormals[i]);
-					}
-				}
-			} // use temp geometry to compute face and vertex normals for each morph
-
-
-			var tmpGeo = new Geometry();
-			tmpGeo.faces = this.faces;
-
-			for (var _i5 = 0, _il2 = this.morphTargets.length; _i5 < _il2; _i5++) {
-				// create on first access
-				if (!this.morphNormals[_i5]) {
-					this.morphNormals[_i5] = {};
-					this.morphNormals[_i5].faceNormals = [];
-					this.morphNormals[_i5].vertexNormals = [];
-					var dstNormalsFace = this.morphNormals[_i5].faceNormals;
-					var dstNormalsVertex = this.morphNormals[_i5].vertexNormals;
-
-					for (var _f3 = 0, _fl3 = this.faces.length; _f3 < _fl3; _f3++) {
-						var faceNormal = new Vector3();
-						var vertexNormals = {
-							a: new Vector3(),
-							b: new Vector3(),
-							c: new Vector3()
-						};
-						dstNormalsFace.push(faceNormal);
-						dstNormalsVertex.push(vertexNormals);
-					}
-				}
-
-				var morphNormals = this.morphNormals[_i5]; // set vertices to morph target
-
-				tmpGeo.vertices = this.morphTargets[_i5].vertices; // compute morph normals
-
-				tmpGeo.computeFaceNormals();
-				tmpGeo.computeVertexNormals(); // store morph normals
-
-				for (var _f4 = 0, _fl4 = this.faces.length; _f4 < _fl4; _f4++) {
-					var _face3 = this.faces[_f4];
-					var _faceNormal = morphNormals.faceNormals[_f4];
-					var _vertexNormals = morphNormals.vertexNormals[_f4];
-
-					_faceNormal.copy(_face3.normal);
-
-					_vertexNormals.a.copy(_face3.vertexNormals[0]);
-
-					_vertexNormals.b.copy(_face3.vertexNormals[1]);
-
-					_vertexNormals.c.copy(_face3.vertexNormals[2]);
-				}
-			} // restore original normals
-
-
-			for (var _f5 = 0, _fl5 = this.faces.length; _f5 < _fl5; _f5++) {
-				var _face4 = this.faces[_f5];
-				_face4.normal = _face4.__originalFaceNormal;
-				_face4.vertexNormals = _face4.__originalVertexNormals;
-			}
-		},
-		computeBoundingBox: function computeBoundingBox() {
-			if (this.boundingBox === null) {
-				this.boundingBox = new Box3();
-			}
-
-			this.boundingBox.setFromPoints(this.vertices);
-		},
-		computeBoundingSphere: function computeBoundingSphere() {
-			if (this.boundingSphere === null) {
-				this.boundingSphere = new Sphere();
-			}
-
-			this.boundingSphere.setFromPoints(this.vertices);
-		},
-		merge: function merge(geometry, matrix, materialIndexOffset) {
-			if (!(geometry && geometry.isGeometry)) {
-				console.error('THREE.Geometry.merge(): geometry not an instance of THREE.Geometry.', geometry);
-				return;
-			}
-
-			var normalMatrix;
-			var vertexOffset = this.vertices.length,
-					vertices1 = this.vertices,
-					vertices2 = geometry.vertices,
-					faces1 = this.faces,
-					faces2 = geometry.faces,
-					colors1 = this.colors,
-					colors2 = geometry.colors;
-			if (materialIndexOffset === undefined) materialIndexOffset = 0;
-
-			if (matrix !== undefined) {
-				normalMatrix = new Matrix3().getNormalMatrix(matrix);
-			} // vertices
-
-
-			for (var i = 0, il = vertices2.length; i < il; i++) {
-				var vertex = vertices2[i];
-				var vertexCopy = vertex.clone();
-				if (matrix !== undefined) vertexCopy.applyMatrix4(matrix);
-				vertices1.push(vertexCopy);
-			} // colors
-
-
-			for (var _i6 = 0, _il3 = colors2.length; _i6 < _il3; _i6++) {
-				colors1.push(colors2[_i6].clone());
-			} // faces
-
-
-			for (var _i7 = 0, _il4 = faces2.length; _i7 < _il4; _i7++) {
-				var face = faces2[_i7];
-				var normal = void 0,
-						color = void 0;
-				var faceVertexNormals = face.vertexNormals,
-						faceVertexColors = face.vertexColors;
-				var faceCopy = new Face3(face.a + vertexOffset, face.b + vertexOffset, face.c + vertexOffset);
-				faceCopy.normal.copy(face.normal);
-
-				if (normalMatrix !== undefined) {
-					faceCopy.normal.applyMatrix3(normalMatrix).normalize();
-				}
-
-				for (var j = 0, jl = faceVertexNormals.length; j < jl; j++) {
-					normal = faceVertexNormals[j].clone();
-
-					if (normalMatrix !== undefined) {
-						normal.applyMatrix3(normalMatrix).normalize();
-					}
-
-					faceCopy.vertexNormals.push(normal);
-				}
-
-				faceCopy.color.copy(face.color);
-
-				for (var _j = 0, _jl = faceVertexColors.length; _j < _jl; _j++) {
-					color = faceVertexColors[_j];
-					faceCopy.vertexColors.push(color.clone());
-				}
-
-				faceCopy.materialIndex = face.materialIndex + materialIndexOffset;
-				faces1.push(faceCopy);
-			} // uvs
-
-
-			for (var _i8 = 0, _il5 = geometry.faceVertexUvs.length; _i8 < _il5; _i8++) {
-				var faceVertexUvs2 = geometry.faceVertexUvs[_i8];
-				if (this.faceVertexUvs[_i8] === undefined) this.faceVertexUvs[_i8] = [];
-
-				for (var _j2 = 0, _jl2 = faceVertexUvs2.length; _j2 < _jl2; _j2++) {
-					var uvs2 = faceVertexUvs2[_j2],
-							uvsCopy = [];
-
-					for (var k = 0, kl = uvs2.length; k < kl; k++) {
-						uvsCopy.push(uvs2[k].clone());
-					}
-
-					this.faceVertexUvs[_i8].push(uvsCopy);
-				}
-			}
-		},
-		mergeMesh: function mergeMesh(mesh) {
-			if (!(mesh && mesh.isMesh)) {
-				console.error('THREE.Geometry.mergeMesh(): mesh not an instance of THREE.Mesh.', mesh);
-				return;
-			}
-
-			if (mesh.matrixAutoUpdate) mesh.updateMatrix();
-			this.merge(mesh.geometry, mesh.matrix);
-		},
-
-		/*
-		 * Checks for duplicate vertices with hashmap.
-		 * Duplicated vertices are removed
-		 * and faces' vertices are updated.
-		 */
-		mergeVertices: function mergeVertices() {
-			var verticesMap = {}; // Hashmap for looking up vertices by position coordinates (and making sure they are unique)
-
-			var unique = [],
-					changes = [];
-			var precisionPoints = 4; // number of decimal points, e.g. 4 for epsilon of 0.0001
-
-			var precision = Math.pow(10, precisionPoints);
-
-			for (var i = 0, il = this.vertices.length; i < il; i++) {
-				var v = this.vertices[i];
-				var key = Math.round(v.x * precision) + '_' + Math.round(v.y * precision) + '_' + Math.round(v.z * precision);
-
-				if (verticesMap[key] === undefined) {
-					verticesMap[key] = i;
-					unique.push(this.vertices[i]);
-					changes[i] = unique.length - 1;
-				} else {
-					//console.log('Duplicate vertex found. ', i, ' could be using ', verticesMap[key]);
-					changes[i] = changes[verticesMap[key]];
-				}
-			} // if faces are completely degenerate after merging vertices, we
-			// have to remove them from the geometry.
-
-
-			var faceIndicesToRemove = [];
-
-			for (var _i9 = 0, _il6 = this.faces.length; _i9 < _il6; _i9++) {
-				var face = this.faces[_i9];
-				face.a = changes[face.a];
-				face.b = changes[face.b];
-				face.c = changes[face.c];
-				var indices = [face.a, face.b, face.c]; // if any duplicate vertices are found in a Face3
-				// we have to remove the face as nothing can be saved
-
-				for (var n = 0; n < 3; n++) {
-					if (indices[n] === indices[(n + 1) % 3]) {
-						faceIndicesToRemove.push(_i9);
-						break;
-					}
-				}
-			}
-
-			for (var _i10 = faceIndicesToRemove.length - 1; _i10 >= 0; _i10--) {
-				var idx = faceIndicesToRemove[_i10];
-				this.faces.splice(idx, 1);
-
-				for (var j = 0, jl = this.faceVertexUvs.length; j < jl; j++) {
-					this.faceVertexUvs[j].splice(idx, 1);
-				}
-			} // Use unique set of vertices
-
-
-			var diff = this.vertices.length - unique.length;
-			this.vertices = unique;
-			return diff;
-		},
-		setFromPoints: function setFromPoints(points) {
-			this.vertices = [];
-
-			for (var i = 0, l = points.length; i < l; i++) {
-				var point = points[i];
-				this.vertices.push(new Vector3(point.x, point.y, point.z || 0));
-			}
-
-			return this;
-		},
-		sortFacesByMaterialIndex: function sortFacesByMaterialIndex() {
-			var faces = this.faces;
-			var length = faces.length; // tag faces
-
-			for (var i = 0; i < length; i++) {
-				faces[i]._id = i;
-			} // sort faces
-
-
-			function materialIndexSort(a, b) {
-				return a.materialIndex - b.materialIndex;
-			}
-
-			faces.sort(materialIndexSort); // sort uvs
-
-			var uvs1 = this.faceVertexUvs[0];
-			var uvs2 = this.faceVertexUvs[1];
-			var newUvs1, newUvs2;
-			if (uvs1 && uvs1.length === length) newUvs1 = [];
-			if (uvs2 && uvs2.length === length) newUvs2 = [];
-
-			for (var _i11 = 0; _i11 < length; _i11++) {
-				var id = faces[_i11]._id;
-				if (newUvs1) newUvs1.push(uvs1[id]);
-				if (newUvs2) newUvs2.push(uvs2[id]);
-			}
-
-			if (newUvs1) this.faceVertexUvs[0] = newUvs1;
-			if (newUvs2) this.faceVertexUvs[1] = newUvs2;
-		},
-		toJSON: function toJSON() {
-			var data = {
-				metadata: {
-					version: 4.5,
-					type: 'Geometry',
-					generator: 'Geometry.toJSON'
-				}
-			}; // standard Geometry serialization
-
-			data.uuid = this.uuid;
-			data.type = this.type;
-			if (this.name !== '') data.name = this.name;
-
-			if (this.parameters !== undefined) {
-				var parameters = this.parameters;
-
-				for (var key in parameters) {
-					if (parameters[key] !== undefined) data[key] = parameters[key];
-				}
-
-				return data;
-			}
-
-			var vertices = [];
-
-			for (var i = 0; i < this.vertices.length; i++) {
-				var vertex = this.vertices[i];
-				vertices.push(vertex.x, vertex.y, vertex.z);
-			}
-
-			var faces = [];
-			var normals = [];
-			var normalsHash = {};
-			var colors = [];
-			var colorsHash = {};
-			var uvs = [];
-			var uvsHash = {};
-
-			for (var _i12 = 0; _i12 < this.faces.length; _i12++) {
-				var face = this.faces[_i12];
-				var hasMaterial = true;
-				var hasFaceUv = false; // deprecated
-
-				var hasFaceVertexUv = this.faceVertexUvs[0][_i12] !== undefined;
-				var hasFaceNormal = face.normal.length() > 0;
-				var hasFaceVertexNormal = face.vertexNormals.length > 0;
-				var hasFaceColor = face.color.r !== 1 || face.color.g !== 1 || face.color.b !== 1;
-				var hasFaceVertexColor = face.vertexColors.length > 0;
-				var faceType = 0;
-				faceType = setBit(faceType, 0, 0); // isQuad
-
-				faceType = setBit(faceType, 1, hasMaterial);
-				faceType = setBit(faceType, 2, hasFaceUv);
-				faceType = setBit(faceType, 3, hasFaceVertexUv);
-				faceType = setBit(faceType, 4, hasFaceNormal);
-				faceType = setBit(faceType, 5, hasFaceVertexNormal);
-				faceType = setBit(faceType, 6, hasFaceColor);
-				faceType = setBit(faceType, 7, hasFaceVertexColor);
-				faces.push(faceType);
-				faces.push(face.a, face.b, face.c);
-				faces.push(face.materialIndex);
-
-				if (hasFaceVertexUv) {
-					var faceVertexUvs = this.faceVertexUvs[0][_i12];
-					faces.push(getUvIndex(faceVertexUvs[0]), getUvIndex(faceVertexUvs[1]), getUvIndex(faceVertexUvs[2]));
-				}
-
-				if (hasFaceNormal) {
-					faces.push(getNormalIndex(face.normal));
-				}
-
-				if (hasFaceVertexNormal) {
-					var vertexNormals = face.vertexNormals;
-					faces.push(getNormalIndex(vertexNormals[0]), getNormalIndex(vertexNormals[1]), getNormalIndex(vertexNormals[2]));
-				}
-
-				if (hasFaceColor) {
-					faces.push(getColorIndex(face.color));
-				}
-
-				if (hasFaceVertexColor) {
-					var vertexColors = face.vertexColors;
-					faces.push(getColorIndex(vertexColors[0]), getColorIndex(vertexColors[1]), getColorIndex(vertexColors[2]));
-				}
-			}
-
-			function setBit(value, position, enabled) {
-				return enabled ? value | 1 << position : value & ~(1 << position);
-			}
-
-			function getNormalIndex(normal) {
-				var hash = normal.x.toString() + normal.y.toString() + normal.z.toString();
-
-				if (normalsHash[hash] !== undefined) {
-					return normalsHash[hash];
-				}
-
-				normalsHash[hash] = normals.length / 3;
-				normals.push(normal.x, normal.y, normal.z);
-				return normalsHash[hash];
-			}
-
-			function getColorIndex(color) {
-				var hash = color.r.toString() + color.g.toString() + color.b.toString();
-
-				if (colorsHash[hash] !== undefined) {
-					return colorsHash[hash];
-				}
-
-				colorsHash[hash] = colors.length;
-				colors.push(color.getHex());
-				return colorsHash[hash];
-			}
-
-			function getUvIndex(uv) {
-				var hash = uv.x.toString() + uv.y.toString();
-
-				if (uvsHash[hash] !== undefined) {
-					return uvsHash[hash];
-				}
-
-				uvsHash[hash] = uvs.length / 2;
-				uvs.push(uv.x, uv.y);
-				return uvsHash[hash];
-			}
-
-			data.data = {};
-			data.data.vertices = vertices;
-			data.data.normals = normals;
-			if (colors.length > 0) data.data.colors = colors;
-			if (uvs.length > 0) data.data.uvs = [uvs]; // temporal backward compatibility
-
-			data.data.faces = faces;
-			return data;
-		},
-		clone: function clone() {
-			/*
-			 // Handle primitives
-				 const parameters = this.parameters;
-				 if ( parameters !== undefined ) {
-				 const values = [];
-				 for ( const key in parameters ) {
-				 values.push( parameters[ key ] );
-				 }
-				 const geometry = Object.create( this.constructor.prototype );
-			 this.constructor.apply( geometry, values );
-			 return geometry;
-				 }
-				 return new this.constructor().copy( this );
-			 */
-			return new Geometry().copy(this);
-		},
-		copy: function copy(source) {
-			// reset
-			this.vertices = [];
-			this.colors = [];
-			this.faces = [];
-			this.faceVertexUvs = [[]];
-			this.morphTargets = [];
-			this.morphNormals = [];
-			this.skinWeights = [];
-			this.skinIndices = [];
-			this.lineDistances = [];
-			this.boundingBox = null;
-			this.boundingSphere = null; // name
-
-			this.name = source.name; // vertices
-
-			var vertices = source.vertices;
-
-			for (var i = 0, il = vertices.length; i < il; i++) {
-				this.vertices.push(vertices[i].clone());
-			} // colors
-
-
-			var colors = source.colors;
-
-			for (var _i13 = 0, _il7 = colors.length; _i13 < _il7; _i13++) {
-				this.colors.push(colors[_i13].clone());
-			} // faces
-
-
-			var faces = source.faces;
-
-			for (var _i14 = 0, _il8 = faces.length; _i14 < _il8; _i14++) {
-				this.faces.push(faces[_i14].clone());
-			} // face vertex uvs
-
-
-			for (var _i15 = 0, _il9 = source.faceVertexUvs.length; _i15 < _il9; _i15++) {
-				var faceVertexUvs = source.faceVertexUvs[_i15];
-
-				if (this.faceVertexUvs[_i15] === undefined) {
-					this.faceVertexUvs[_i15] = [];
-				}
-
-				for (var j = 0, jl = faceVertexUvs.length; j < jl; j++) {
-					var uvs = faceVertexUvs[j],
-							uvsCopy = [];
-
-					for (var k = 0, kl = uvs.length; k < kl; k++) {
-						var uv = uvs[k];
-						uvsCopy.push(uv.clone());
-					}
-
-					this.faceVertexUvs[_i15].push(uvsCopy);
-				}
-			} // morph targets
-
-
-			var morphTargets = source.morphTargets;
-
-			for (var _i16 = 0, _il10 = morphTargets.length; _i16 < _il10; _i16++) {
-				var morphTarget = {};
-				morphTarget.name = morphTargets[_i16].name; // vertices
-
-				if (morphTargets[_i16].vertices !== undefined) {
-					morphTarget.vertices = [];
-
-					for (var _j3 = 0, _jl3 = morphTargets[_i16].vertices.length; _j3 < _jl3; _j3++) {
-						morphTarget.vertices.push(morphTargets[_i16].vertices[_j3].clone());
-					}
-				} // normals
-
-
-				if (morphTargets[_i16].normals !== undefined) {
-					morphTarget.normals = [];
-
-					for (var _j4 = 0, _jl4 = morphTargets[_i16].normals.length; _j4 < _jl4; _j4++) {
-						morphTarget.normals.push(morphTargets[_i16].normals[_j4].clone());
-					}
-				}
-
-				this.morphTargets.push(morphTarget);
-			} // morph normals
-
-
-			var morphNormals = source.morphNormals;
-
-			for (var _i17 = 0, _il11 = morphNormals.length; _i17 < _il11; _i17++) {
-				var morphNormal = {}; // vertex normals
-
-				if (morphNormals[_i17].vertexNormals !== undefined) {
-					morphNormal.vertexNormals = [];
-
-					for (var _j5 = 0, _jl5 = morphNormals[_i17].vertexNormals.length; _j5 < _jl5; _j5++) {
-						var srcVertexNormal = morphNormals[_i17].vertexNormals[_j5];
-						var destVertexNormal = {};
-						destVertexNormal.a = srcVertexNormal.a.clone();
-						destVertexNormal.b = srcVertexNormal.b.clone();
-						destVertexNormal.c = srcVertexNormal.c.clone();
-						morphNormal.vertexNormals.push(destVertexNormal);
-					}
-				} // face normals
-
-
-				if (morphNormals[_i17].faceNormals !== undefined) {
-					morphNormal.faceNormals = [];
-
-					for (var _j6 = 0, _jl6 = morphNormals[_i17].faceNormals.length; _j6 < _jl6; _j6++) {
-						morphNormal.faceNormals.push(morphNormals[_i17].faceNormals[_j6].clone());
-					}
-				}
-
-				this.morphNormals.push(morphNormal);
-			} // skin weights
-
-
-			var skinWeights = source.skinWeights;
-
-			for (var _i18 = 0, _il12 = skinWeights.length; _i18 < _il12; _i18++) {
-				this.skinWeights.push(skinWeights[_i18].clone());
-			} // skin indices
-
-
-			var skinIndices = source.skinIndices;
-
-			for (var _i19 = 0, _il13 = skinIndices.length; _i19 < _il13; _i19++) {
-				this.skinIndices.push(skinIndices[_i19].clone());
-			} // line distances
-
-
-			var lineDistances = source.lineDistances;
-
-			for (var _i20 = 0, _il14 = lineDistances.length; _i20 < _il14; _i20++) {
-				this.lineDistances.push(lineDistances[_i20]);
-			} // bounding box
-
-
-			var boundingBox = source.boundingBox;
-
-			if (boundingBox !== null) {
-				this.boundingBox = boundingBox.clone();
-			} // bounding sphere
-
-
-			var boundingSphere = source.boundingSphere;
-
-			if (boundingSphere !== null) {
-				this.boundingSphere = boundingSphere.clone();
-			} // update flags
-
-
-			this.elementsNeedUpdate = source.elementsNeedUpdate;
-			this.verticesNeedUpdate = source.verticesNeedUpdate;
-			this.uvsNeedUpdate = source.uvsNeedUpdate;
-			this.normalsNeedUpdate = source.normalsNeedUpdate;
-			this.colorsNeedUpdate = source.colorsNeedUpdate;
-			this.lineDistancesNeedUpdate = source.lineDistancesNeedUpdate;
-			this.groupsNeedUpdate = source.groupsNeedUpdate;
-			return this;
-		},
-		dispose: function dispose() {
-			this.dispatchEvent({
-				type: 'dispose'
-			});
-		}
-	});
-
 	var BoxGeometry = /*#__PURE__*/function (_Geometry) {
 		_inheritsLoose(BoxGeometry, _Geometry);
 
@@ -21777,1167 +24645,6 @@
 		return EdgesGeometry;
 	}(BufferGeometry);
 
-	/**
-	 * Port from https://github.com/mapbox/earcut (v2.2.2)
-	 */
-	var Earcut = {
-		triangulate: function triangulate(data, holeIndices, dim) {
-			dim = dim || 2;
-			var hasHoles = holeIndices && holeIndices.length;
-			var outerLen = hasHoles ? holeIndices[0] * dim : data.length;
-			var outerNode = linkedList(data, 0, outerLen, dim, true);
-			var triangles = [];
-			if (!outerNode || outerNode.next === outerNode.prev) return triangles;
-			var minX, minY, maxX, maxY, x, y, invSize;
-			if (hasHoles) outerNode = eliminateHoles(data, holeIndices, outerNode, dim); // if the shape is not too simple, we'll use z-order curve hash later; calculate polygon bbox
-
-			if (data.length > 80 * dim) {
-				minX = maxX = data[0];
-				minY = maxY = data[1];
-
-				for (var i = dim; i < outerLen; i += dim) {
-					x = data[i];
-					y = data[i + 1];
-					if (x < minX) minX = x;
-					if (y < minY) minY = y;
-					if (x > maxX) maxX = x;
-					if (y > maxY) maxY = y;
-				} // minX, minY and invSize are later used to transform coords into integers for z-order calculation
-
-
-				invSize = Math.max(maxX - minX, maxY - minY);
-				invSize = invSize !== 0 ? 1 / invSize : 0;
-			}
-
-			earcutLinked(outerNode, triangles, dim, minX, minY, invSize);
-			return triangles;
-		}
-	}; // create a circular doubly linked list from polygon points in the specified winding order
-
-	function linkedList(data, start, end, dim, clockwise) {
-		var i, last;
-
-		if (clockwise === signedArea(data, start, end, dim) > 0) {
-			for (i = start; i < end; i += dim) {
-				last = insertNode(i, data[i], data[i + 1], last);
-			}
-		} else {
-			for (i = end - dim; i >= start; i -= dim) {
-				last = insertNode(i, data[i], data[i + 1], last);
-			}
-		}
-
-		if (last && equals(last, last.next)) {
-			removeNode(last);
-			last = last.next;
-		}
-
-		return last;
-	} // eliminate colinear or duplicate points
-
-
-	function filterPoints(start, end) {
-		if (!start) return start;
-		if (!end) end = start;
-		var p = start,
-				again;
-
-		do {
-			again = false;
-
-			if (!p.steiner && (equals(p, p.next) || area(p.prev, p, p.next) === 0)) {
-				removeNode(p);
-				p = end = p.prev;
-				if (p === p.next) break;
-				again = true;
-			} else {
-				p = p.next;
-			}
-		} while (again || p !== end);
-
-		return end;
-	} // main ear slicing loop which triangulates a polygon (given as a linked list)
-
-
-	function earcutLinked(ear, triangles, dim, minX, minY, invSize, pass) {
-		if (!ear) return; // interlink polygon nodes in z-order
-
-		if (!pass && invSize) indexCurve(ear, minX, minY, invSize);
-		var stop = ear,
-				prev,
-				next; // iterate through ears, slicing them one by one
-
-		while (ear.prev !== ear.next) {
-			prev = ear.prev;
-			next = ear.next;
-
-			if (invSize ? isEarHashed(ear, minX, minY, invSize) : isEar(ear)) {
-				// cut off the triangle
-				triangles.push(prev.i / dim);
-				triangles.push(ear.i / dim);
-				triangles.push(next.i / dim);
-				removeNode(ear); // skipping the next vertex leads to less sliver triangles
-
-				ear = next.next;
-				stop = next.next;
-				continue;
-			}
-
-			ear = next; // if we looped through the whole remaining polygon and can't find any more ears
-
-			if (ear === stop) {
-				// try filtering points and slicing again
-				if (!pass) {
-					earcutLinked(filterPoints(ear), triangles, dim, minX, minY, invSize, 1); // if this didn't work, try curing all small self-intersections locally
-				} else if (pass === 1) {
-					ear = cureLocalIntersections(filterPoints(ear), triangles, dim);
-					earcutLinked(ear, triangles, dim, minX, minY, invSize, 2); // as a last resort, try splitting the remaining polygon into two
-				} else if (pass === 2) {
-					splitEarcut(ear, triangles, dim, minX, minY, invSize);
-				}
-
-				break;
-			}
-		}
-	} // check whether a polygon node forms a valid ear with adjacent nodes
-
-
-	function isEar(ear) {
-		var a = ear.prev,
-				b = ear,
-				c = ear.next;
-		if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
-		// now make sure we don't have other points inside the potential ear
-
-		var p = ear.next.next;
-
-		while (p !== ear.prev) {
-			if (pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
-			p = p.next;
-		}
-
-		return true;
-	}
-
-	function isEarHashed(ear, minX, minY, invSize) {
-		var a = ear.prev,
-				b = ear,
-				c = ear.next;
-		if (area(a, b, c) >= 0) return false; // reflex, can't be an ear
-		// triangle bbox; min & max are calculated like this for speed
-
-		var minTX = a.x < b.x ? a.x < c.x ? a.x : c.x : b.x < c.x ? b.x : c.x,
-				minTY = a.y < b.y ? a.y < c.y ? a.y : c.y : b.y < c.y ? b.y : c.y,
-				maxTX = a.x > b.x ? a.x > c.x ? a.x : c.x : b.x > c.x ? b.x : c.x,
-				maxTY = a.y > b.y ? a.y > c.y ? a.y : c.y : b.y > c.y ? b.y : c.y; // z-order range for the current triangle bbox;
-
-		var minZ = zOrder(minTX, minTY, minX, minY, invSize),
-				maxZ = zOrder(maxTX, maxTY, minX, minY, invSize);
-		var p = ear.prevZ,
-				n = ear.nextZ; // look for points inside the triangle in both directions
-
-		while (p && p.z >= minZ && n && n.z <= maxZ) {
-			if (p !== ear.prev && p !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
-			p = p.prevZ;
-			if (n !== ear.prev && n !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) && area(n.prev, n, n.next) >= 0) return false;
-			n = n.nextZ;
-		} // look for remaining points in decreasing z-order
-
-
-		while (p && p.z >= minZ) {
-			if (p !== ear.prev && p !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, p.x, p.y) && area(p.prev, p, p.next) >= 0) return false;
-			p = p.prevZ;
-		} // look for remaining points in increasing z-order
-
-
-		while (n && n.z <= maxZ) {
-			if (n !== ear.prev && n !== ear.next && pointInTriangle(a.x, a.y, b.x, b.y, c.x, c.y, n.x, n.y) && area(n.prev, n, n.next) >= 0) return false;
-			n = n.nextZ;
-		}
-
-		return true;
-	} // go through all polygon nodes and cure small local self-intersections
-
-
-	function cureLocalIntersections(start, triangles, dim) {
-		var p = start;
-
-		do {
-			var a = p.prev,
-					b = p.next.next;
-
-			if (!equals(a, b) && intersects(a, p, p.next, b) && locallyInside(a, b) && locallyInside(b, a)) {
-				triangles.push(a.i / dim);
-				triangles.push(p.i / dim);
-				triangles.push(b.i / dim); // remove two nodes involved
-
-				removeNode(p);
-				removeNode(p.next);
-				p = start = b;
-			}
-
-			p = p.next;
-		} while (p !== start);
-
-		return filterPoints(p);
-	} // try splitting polygon into two and triangulate them independently
-
-
-	function splitEarcut(start, triangles, dim, minX, minY, invSize) {
-		// look for a valid diagonal that divides the polygon into two
-		var a = start;
-
-		do {
-			var b = a.next.next;
-
-			while (b !== a.prev) {
-				if (a.i !== b.i && isValidDiagonal(a, b)) {
-					// split the polygon in two by the diagonal
-					var c = splitPolygon(a, b); // filter colinear points around the cuts
-
-					a = filterPoints(a, a.next);
-					c = filterPoints(c, c.next); // run earcut on each half
-
-					earcutLinked(a, triangles, dim, minX, minY, invSize);
-					earcutLinked(c, triangles, dim, minX, minY, invSize);
-					return;
-				}
-
-				b = b.next;
-			}
-
-			a = a.next;
-		} while (a !== start);
-	} // link every hole into the outer loop, producing a single-ring polygon without holes
-
-
-	function eliminateHoles(data, holeIndices, outerNode, dim) {
-		var queue = [];
-		var i, len, start, end, list;
-
-		for (i = 0, len = holeIndices.length; i < len; i++) {
-			start = holeIndices[i] * dim;
-			end = i < len - 1 ? holeIndices[i + 1] * dim : data.length;
-			list = linkedList(data, start, end, dim, false);
-			if (list === list.next) list.steiner = true;
-			queue.push(getLeftmost(list));
-		}
-
-		queue.sort(compareX); // process holes from left to right
-
-		for (i = 0; i < queue.length; i++) {
-			eliminateHole(queue[i], outerNode);
-			outerNode = filterPoints(outerNode, outerNode.next);
-		}
-
-		return outerNode;
-	}
-
-	function compareX(a, b) {
-		return a.x - b.x;
-	} // find a bridge between vertices that connects hole with an outer ring and and link it
-
-
-	function eliminateHole(hole, outerNode) {
-		outerNode = findHoleBridge(hole, outerNode);
-
-		if (outerNode) {
-			var b = splitPolygon(outerNode, hole); // filter collinear points around the cuts
-
-			filterPoints(outerNode, outerNode.next);
-			filterPoints(b, b.next);
-		}
-	} // David Eberly's algorithm for finding a bridge between hole and outer polygon
-
-
-	function findHoleBridge(hole, outerNode) {
-		var p = outerNode;
-		var hx = hole.x;
-		var hy = hole.y;
-		var qx = -Infinity,
-				m; // find a segment intersected by a ray from the hole's leftmost point to the left;
-		// segment's endpoint with lesser x will be potential connection point
-
-		do {
-			if (hy <= p.y && hy >= p.next.y && p.next.y !== p.y) {
-				var x = p.x + (hy - p.y) * (p.next.x - p.x) / (p.next.y - p.y);
-
-				if (x <= hx && x > qx) {
-					qx = x;
-
-					if (x === hx) {
-						if (hy === p.y) return p;
-						if (hy === p.next.y) return p.next;
-					}
-
-					m = p.x < p.next.x ? p : p.next;
-				}
-			}
-
-			p = p.next;
-		} while (p !== outerNode);
-
-		if (!m) return null;
-		if (hx === qx) return m; // hole touches outer segment; pick leftmost endpoint
-		// look for points inside the triangle of hole point, segment intersection and endpoint;
-		// if there are no points found, we have a valid connection;
-		// otherwise choose the point of the minimum angle with the ray as connection point
-
-		var stop = m,
-				mx = m.x,
-				my = m.y;
-		var tanMin = Infinity,
-				tan;
-		p = m;
-
-		do {
-			if (hx >= p.x && p.x >= mx && hx !== p.x && pointInTriangle(hy < my ? hx : qx, hy, mx, my, hy < my ? qx : hx, hy, p.x, p.y)) {
-				tan = Math.abs(hy - p.y) / (hx - p.x); // tangential
-
-				if (locallyInside(p, hole) && (tan < tanMin || tan === tanMin && (p.x > m.x || p.x === m.x && sectorContainsSector(m, p)))) {
-					m = p;
-					tanMin = tan;
-				}
-			}
-
-			p = p.next;
-		} while (p !== stop);
-
-		return m;
-	} // whether sector in vertex m contains sector in vertex p in the same coordinates
-
-
-	function sectorContainsSector(m, p) {
-		return area(m.prev, m, p.prev) < 0 && area(p.next, m, m.next) < 0;
-	} // interlink polygon nodes in z-order
-
-
-	function indexCurve(start, minX, minY, invSize) {
-		var p = start;
-
-		do {
-			if (p.z === null) p.z = zOrder(p.x, p.y, minX, minY, invSize);
-			p.prevZ = p.prev;
-			p.nextZ = p.next;
-			p = p.next;
-		} while (p !== start);
-
-		p.prevZ.nextZ = null;
-		p.prevZ = null;
-		sortLinked(p);
-	} // Simon Tatham's linked list merge sort algorithm
-	// http://www.chiark.greenend.org.uk/~sgtatham/algorithms/listsort.html
-
-
-	function sortLinked(list) {
-		var i,
-				p,
-				q,
-				e,
-				tail,
-				numMerges,
-				pSize,
-				qSize,
-				inSize = 1;
-
-		do {
-			p = list;
-			list = null;
-			tail = null;
-			numMerges = 0;
-
-			while (p) {
-				numMerges++;
-				q = p;
-				pSize = 0;
-
-				for (i = 0; i < inSize; i++) {
-					pSize++;
-					q = q.nextZ;
-					if (!q) break;
-				}
-
-				qSize = inSize;
-
-				while (pSize > 0 || qSize > 0 && q) {
-					if (pSize !== 0 && (qSize === 0 || !q || p.z <= q.z)) {
-						e = p;
-						p = p.nextZ;
-						pSize--;
-					} else {
-						e = q;
-						q = q.nextZ;
-						qSize--;
-					}
-
-					if (tail) tail.nextZ = e;else list = e;
-					e.prevZ = tail;
-					tail = e;
-				}
-
-				p = q;
-			}
-
-			tail.nextZ = null;
-			inSize *= 2;
-		} while (numMerges > 1);
-
-		return list;
-	} // z-order of a point given coords and inverse of the longer side of data bbox
-
-
-	function zOrder(x, y, minX, minY, invSize) {
-		// coords are transformed into non-negative 15-bit integer range
-		x = 32767 * (x - minX) * invSize;
-		y = 32767 * (y - minY) * invSize;
-		x = (x | x << 8) & 0x00FF00FF;
-		x = (x | x << 4) & 0x0F0F0F0F;
-		x = (x | x << 2) & 0x33333333;
-		x = (x | x << 1) & 0x55555555;
-		y = (y | y << 8) & 0x00FF00FF;
-		y = (y | y << 4) & 0x0F0F0F0F;
-		y = (y | y << 2) & 0x33333333;
-		y = (y | y << 1) & 0x55555555;
-		return x | y << 1;
-	} // find the leftmost node of a polygon ring
-
-
-	function getLeftmost(start) {
-		var p = start,
-				leftmost = start;
-
-		do {
-			if (p.x < leftmost.x || p.x === leftmost.x && p.y < leftmost.y) leftmost = p;
-			p = p.next;
-		} while (p !== start);
-
-		return leftmost;
-	} // check if a point lies within a convex triangle
-
-
-	function pointInTriangle(ax, ay, bx, by, cx, cy, px, py) {
-		return (cx - px) * (ay - py) - (ax - px) * (cy - py) >= 0 && (ax - px) * (by - py) - (bx - px) * (ay - py) >= 0 && (bx - px) * (cy - py) - (cx - px) * (by - py) >= 0;
-	} // check if a diagonal between two polygon nodes is valid (lies in polygon interior)
-
-
-	function isValidDiagonal(a, b) {
-		return a.next.i !== b.i && a.prev.i !== b.i && !intersectsPolygon(a, b) && ( // dones't intersect other edges
-		locallyInside(a, b) && locallyInside(b, a) && middleInside(a, b) && ( // locally visible
-		area(a.prev, a, b.prev) || area(a, b.prev, b)) || // does not create opposite-facing sectors
-		equals(a, b) && area(a.prev, a, a.next) > 0 && area(b.prev, b, b.next) > 0); // special zero-length case
-	} // signed area of a triangle
-
-
-	function area(p, q, r) {
-		return (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y);
-	} // check if two points are equal
-
-
-	function equals(p1, p2) {
-		return p1.x === p2.x && p1.y === p2.y;
-	} // check if two segments intersect
-
-
-	function intersects(p1, q1, p2, q2) {
-		var o1 = sign(area(p1, q1, p2));
-		var o2 = sign(area(p1, q1, q2));
-		var o3 = sign(area(p2, q2, p1));
-		var o4 = sign(area(p2, q2, q1));
-		if (o1 !== o2 && o3 !== o4) return true; // general case
-
-		if (o1 === 0 && onSegment(p1, p2, q1)) return true; // p1, q1 and p2 are collinear and p2 lies on p1q1
-
-		if (o2 === 0 && onSegment(p1, q2, q1)) return true; // p1, q1 and q2 are collinear and q2 lies on p1q1
-
-		if (o3 === 0 && onSegment(p2, p1, q2)) return true; // p2, q2 and p1 are collinear and p1 lies on p2q2
-
-		if (o4 === 0 && onSegment(p2, q1, q2)) return true; // p2, q2 and q1 are collinear and q1 lies on p2q2
-
-		return false;
-	} // for collinear points p, q, r, check if point q lies on segment pr
-
-
-	function onSegment(p, q, r) {
-		return q.x <= Math.max(p.x, r.x) && q.x >= Math.min(p.x, r.x) && q.y <= Math.max(p.y, r.y) && q.y >= Math.min(p.y, r.y);
-	}
-
-	function sign(num) {
-		return num > 0 ? 1 : num < 0 ? -1 : 0;
-	} // check if a polygon diagonal intersects any polygon segments
-
-
-	function intersectsPolygon(a, b) {
-		var p = a;
-
-		do {
-			if (p.i !== a.i && p.next.i !== a.i && p.i !== b.i && p.next.i !== b.i && intersects(p, p.next, a, b)) return true;
-			p = p.next;
-		} while (p !== a);
-
-		return false;
-	} // check if a polygon diagonal is locally inside the polygon
-
-
-	function locallyInside(a, b) {
-		return area(a.prev, a, a.next) < 0 ? area(a, b, a.next) >= 0 && area(a, a.prev, b) >= 0 : area(a, b, a.prev) < 0 || area(a, a.next, b) < 0;
-	} // check if the middle point of a polygon diagonal is inside the polygon
-
-
-	function middleInside(a, b) {
-		var p = a,
-				inside = false;
-		var px = (a.x + b.x) / 2,
-				py = (a.y + b.y) / 2;
-
-		do {
-			if (p.y > py !== p.next.y > py && p.next.y !== p.y && px < (p.next.x - p.x) * (py - p.y) / (p.next.y - p.y) + p.x) inside = !inside;
-			p = p.next;
-		} while (p !== a);
-
-		return inside;
-	} // link two polygon vertices with a bridge; if the vertices belong to the same ring, it splits polygon into two;
-	// if one belongs to the outer ring and another to a hole, it merges it into a single ring
-
-
-	function splitPolygon(a, b) {
-		var a2 = new Node(a.i, a.x, a.y),
-				b2 = new Node(b.i, b.x, b.y),
-				an = a.next,
-				bp = b.prev;
-		a.next = b;
-		b.prev = a;
-		a2.next = an;
-		an.prev = a2;
-		b2.next = a2;
-		a2.prev = b2;
-		bp.next = b2;
-		b2.prev = bp;
-		return b2;
-	} // create a node and optionally link it with previous one (in a circular doubly linked list)
-
-
-	function insertNode(i, x, y, last) {
-		var p = new Node(i, x, y);
-
-		if (!last) {
-			p.prev = p;
-			p.next = p;
-		} else {
-			p.next = last.next;
-			p.prev = last;
-			last.next.prev = p;
-			last.next = p;
-		}
-
-		return p;
-	}
-
-	function removeNode(p) {
-		p.next.prev = p.prev;
-		p.prev.next = p.next;
-		if (p.prevZ) p.prevZ.nextZ = p.nextZ;
-		if (p.nextZ) p.nextZ.prevZ = p.prevZ;
-	}
-
-	function Node(i, x, y) {
-		// vertex index in coordinates array
-		this.i = i; // vertex coordinates
-
-		this.x = x;
-		this.y = y; // previous and next vertex nodes in a polygon ring
-
-		this.prev = null;
-		this.next = null; // z-order curve value
-
-		this.z = null; // previous and next nodes in z-order
-
-		this.prevZ = null;
-		this.nextZ = null; // indicates whether this is a steiner point
-
-		this.steiner = false;
-	}
-
-	function signedArea(data, start, end, dim) {
-		var sum = 0;
-
-		for (var i = start, j = end - dim; i < end; i += dim) {
-			sum += (data[j] - data[i]) * (data[i + 1] + data[j + 1]);
-			j = i;
-		}
-
-		return sum;
-	}
-
-	var ShapeUtils = {
-		// calculate area of the contour polygon
-		area: function area(contour) {
-			var n = contour.length;
-			var a = 0.0;
-
-			for (var p = n - 1, q = 0; q < n; p = q++) {
-				a += contour[p].x * contour[q].y - contour[q].x * contour[p].y;
-			}
-
-			return a * 0.5;
-		},
-		isClockWise: function isClockWise(pts) {
-			return ShapeUtils.area(pts) < 0;
-		},
-		triangulateShape: function triangulateShape(contour, holes) {
-			var vertices = []; // flat array of vertices like [ x0,y0, x1,y1, x2,y2, ... ]
-
-			var holeIndices = []; // array of hole indices
-
-			var faces = []; // final array of vertex indices like [ [ a,b,d ], [ b,c,d ] ]
-
-			removeDupEndPts(contour);
-			addContour(vertices, contour); //
-
-			var holeIndex = contour.length;
-			holes.forEach(removeDupEndPts);
-
-			for (var i = 0; i < holes.length; i++) {
-				holeIndices.push(holeIndex);
-				holeIndex += holes[i].length;
-				addContour(vertices, holes[i]);
-			} //
-
-
-			var triangles = Earcut.triangulate(vertices, holeIndices); //
-
-			for (var _i = 0; _i < triangles.length; _i += 3) {
-				faces.push(triangles.slice(_i, _i + 3));
-			}
-
-			return faces;
-		}
-	};
-
-	function removeDupEndPts(points) {
-		var l = points.length;
-
-		if (l > 2 && points[l - 1].equals(points[0])) {
-			points.pop();
-		}
-	}
-
-	function addContour(vertices, contour) {
-		for (var i = 0; i < contour.length; i++) {
-			vertices.push(contour[i].x);
-			vertices.push(contour[i].y);
-		}
-	}
-
-	var ExtrudeBufferGeometry = /*#__PURE__*/function (_BufferGeometry) {
-		_inheritsLoose(ExtrudeBufferGeometry, _BufferGeometry);
-
-		function ExtrudeBufferGeometry(shapes, options) {
-			var _this;
-
-			_this = _BufferGeometry.call(this) || this;
-			_this.type = 'ExtrudeBufferGeometry';
-			_this.parameters = {
-				shapes: shapes,
-				options: options
-			};
-			shapes = Array.isArray(shapes) ? shapes : [shapes];
-
-			var scope = _assertThisInitialized(_this);
-
-			var verticesArray = [];
-			var uvArray = [];
-
-			for (var i = 0, l = shapes.length; i < l; i++) {
-				var shape = shapes[i];
-				addShape(shape);
-			} // build geometry
-
-
-			_this.setAttribute('position', new Float32BufferAttribute(verticesArray, 3));
-
-			_this.setAttribute('uv', new Float32BufferAttribute(uvArray, 2));
-
-			_this.computeVertexNormals(); // functions
-
-
-			function addShape(shape) {
-				var placeholder = []; // options
-
-				var curveSegments = options.curveSegments !== undefined ? options.curveSegments : 12;
-				var steps = options.steps !== undefined ? options.steps : 1;
-				var depth = options.depth !== undefined ? options.depth : 100;
-				var bevelEnabled = options.bevelEnabled !== undefined ? options.bevelEnabled : true;
-				var bevelThickness = options.bevelThickness !== undefined ? options.bevelThickness : 6;
-				var bevelSize = options.bevelSize !== undefined ? options.bevelSize : bevelThickness - 2;
-				var bevelOffset = options.bevelOffset !== undefined ? options.bevelOffset : 0;
-				var bevelSegments = options.bevelSegments !== undefined ? options.bevelSegments : 3;
-				var extrudePath = options.extrudePath;
-				var uvgen = options.UVGenerator !== undefined ? options.UVGenerator : WorldUVGenerator; // deprecated options
-
-				if (options.amount !== undefined) {
-					console.warn('THREE.ExtrudeBufferGeometry: amount has been renamed to depth.');
-					depth = options.amount;
-				} //
-
-
-				var extrudePts,
-						extrudeByPath = false;
-				var splineTube, binormal, normal, position2;
-
-				if (extrudePath) {
-					extrudePts = extrudePath.getSpacedPoints(steps);
-					extrudeByPath = true;
-					bevelEnabled = false; // bevels not supported for path extrusion
-					// SETUP TNB variables
-					// TODO1 - have a .isClosed in spline?
-
-					splineTube = extrudePath.computeFrenetFrames(steps, false); // console.log(splineTube, 'splineTube', splineTube.normals.length, 'steps', steps, 'extrudePts', extrudePts.length);
-
-					binormal = new Vector3();
-					normal = new Vector3();
-					position2 = new Vector3();
-				} // Safeguards if bevels are not enabled
-
-
-				if (!bevelEnabled) {
-					bevelSegments = 0;
-					bevelThickness = 0;
-					bevelSize = 0;
-					bevelOffset = 0;
-				} // Variables initialization
-
-
-				var shapePoints = shape.extractPoints(curveSegments);
-				var vertices = shapePoints.shape;
-				var holes = shapePoints.holes;
-				var reverse = !ShapeUtils.isClockWise(vertices);
-
-				if (reverse) {
-					vertices = vertices.reverse(); // Maybe we should also check if holes are in the opposite direction, just to be safe ...
-
-					for (var h = 0, hl = holes.length; h < hl; h++) {
-						var ahole = holes[h];
-
-						if (ShapeUtils.isClockWise(ahole)) {
-							holes[h] = ahole.reverse();
-						}
-					}
-				}
-
-				var faces = ShapeUtils.triangulateShape(vertices, holes);
-				/* Vertices */
-
-				var contour = vertices; // vertices has all points but contour has only points of circumference
-
-				for (var _h = 0, _hl = holes.length; _h < _hl; _h++) {
-					var _ahole = holes[_h];
-					vertices = vertices.concat(_ahole);
-				}
-
-				function scalePt2(pt, vec, size) {
-					if (!vec) console.error("THREE.ExtrudeGeometry: vec does not exist");
-					return vec.clone().multiplyScalar(size).add(pt);
-				}
-
-				var vlen = vertices.length,
-						flen = faces.length; // Find directions for point movement
-
-				function getBevelVec(inPt, inPrev, inNext) {
-					// computes for inPt the corresponding point inPt' on a new contour
-					//	 shifted by 1 unit (length of normalized vector) to the left
-					// if we walk along contour clockwise, this new contour is outside the old one
-					//
-					// inPt' is the intersection of the two lines parallel to the two
-					//	adjacent edges of inPt at a distance of 1 unit on the left side.
-					var v_trans_x, v_trans_y, shrink_by; // resulting translation vector for inPt
-					// good reading for geometry algorithms (here: line-line intersection)
-					// http://geomalgorithms.com/a05-_intersect-1.html
-
-					var v_prev_x = inPt.x - inPrev.x,
-							v_prev_y = inPt.y - inPrev.y;
-					var v_next_x = inNext.x - inPt.x,
-							v_next_y = inNext.y - inPt.y;
-					var v_prev_lensq = v_prev_x * v_prev_x + v_prev_y * v_prev_y; // check for collinear edges
-
-					var collinear0 = v_prev_x * v_next_y - v_prev_y * v_next_x;
-
-					if (Math.abs(collinear0) > Number.EPSILON) {
-						// not collinear
-						// length of vectors for normalizing
-						var v_prev_len = Math.sqrt(v_prev_lensq);
-						var v_next_len = Math.sqrt(v_next_x * v_next_x + v_next_y * v_next_y); // shift adjacent points by unit vectors to the left
-
-						var ptPrevShift_x = inPrev.x - v_prev_y / v_prev_len;
-						var ptPrevShift_y = inPrev.y + v_prev_x / v_prev_len;
-						var ptNextShift_x = inNext.x - v_next_y / v_next_len;
-						var ptNextShift_y = inNext.y + v_next_x / v_next_len; // scaling factor for v_prev to intersection point
-
-						var sf = ((ptNextShift_x - ptPrevShift_x) * v_next_y - (ptNextShift_y - ptPrevShift_y) * v_next_x) / (v_prev_x * v_next_y - v_prev_y * v_next_x); // vector from inPt to intersection point
-
-						v_trans_x = ptPrevShift_x + v_prev_x * sf - inPt.x;
-						v_trans_y = ptPrevShift_y + v_prev_y * sf - inPt.y; // Don't normalize!, otherwise sharp corners become ugly
-						//	but prevent crazy spikes
-
-						var v_trans_lensq = v_trans_x * v_trans_x + v_trans_y * v_trans_y;
-
-						if (v_trans_lensq <= 2) {
-							return new Vector2(v_trans_x, v_trans_y);
-						} else {
-							shrink_by = Math.sqrt(v_trans_lensq / 2);
-						}
-					} else {
-						// handle special case of collinear edges
-						var direction_eq = false; // assumes: opposite
-
-						if (v_prev_x > Number.EPSILON) {
-							if (v_next_x > Number.EPSILON) {
-								direction_eq = true;
-							}
-						} else {
-							if (v_prev_x < -Number.EPSILON) {
-								if (v_next_x < -Number.EPSILON) {
-									direction_eq = true;
-								}
-							} else {
-								if (Math.sign(v_prev_y) === Math.sign(v_next_y)) {
-									direction_eq = true;
-								}
-							}
-						}
-
-						if (direction_eq) {
-							// console.log("Warning: lines are a straight sequence");
-							v_trans_x = -v_prev_y;
-							v_trans_y = v_prev_x;
-							shrink_by = Math.sqrt(v_prev_lensq);
-						} else {
-							// console.log("Warning: lines are a straight spike");
-							v_trans_x = v_prev_x;
-							v_trans_y = v_prev_y;
-							shrink_by = Math.sqrt(v_prev_lensq / 2);
-						}
-					}
-
-					return new Vector2(v_trans_x / shrink_by, v_trans_y / shrink_by);
-				}
-
-				var contourMovements = [];
-
-				for (var _i = 0, il = contour.length, j = il - 1, k = _i + 1; _i < il; _i++, j++, k++) {
-					if (j === il) j = 0;
-					if (k === il) k = 0; //	(j)---(i)---(k)
-					// console.log('i,j,k', i, j , k)
-
-					contourMovements[_i] = getBevelVec(contour[_i], contour[j], contour[k]);
-				}
-
-				var holesMovements = [];
-				var oneHoleMovements,
-						verticesMovements = contourMovements.concat();
-
-				for (var _h2 = 0, _hl2 = holes.length; _h2 < _hl2; _h2++) {
-					var _ahole2 = holes[_h2];
-					oneHoleMovements = [];
-
-					for (var _i2 = 0, _il = _ahole2.length, _j = _il - 1, _k = _i2 + 1; _i2 < _il; _i2++, _j++, _k++) {
-						if (_j === _il) _j = 0;
-						if (_k === _il) _k = 0; //	(j)---(i)---(k)
-
-						oneHoleMovements[_i2] = getBevelVec(_ahole2[_i2], _ahole2[_j], _ahole2[_k]);
-					}
-
-					holesMovements.push(oneHoleMovements);
-					verticesMovements = verticesMovements.concat(oneHoleMovements);
-				} // Loop bevelSegments, 1 for the front, 1 for the back
-
-
-				for (var b = 0; b < bevelSegments; b++) {
-					//for ( b = bevelSegments; b > 0; b -- ) {
-					var t = b / bevelSegments;
-					var z = bevelThickness * Math.cos(t * Math.PI / 2);
-
-					var _bs = bevelSize * Math.sin(t * Math.PI / 2) + bevelOffset; // contract shape
-
-
-					for (var _i3 = 0, _il2 = contour.length; _i3 < _il2; _i3++) {
-						var vert = scalePt2(contour[_i3], contourMovements[_i3], _bs);
-						v(vert.x, vert.y, -z);
-					} // expand holes
-
-
-					for (var _h3 = 0, _hl3 = holes.length; _h3 < _hl3; _h3++) {
-						var _ahole3 = holes[_h3];
-						oneHoleMovements = holesMovements[_h3];
-
-						for (var _i4 = 0, _il3 = _ahole3.length; _i4 < _il3; _i4++) {
-							var _vert = scalePt2(_ahole3[_i4], oneHoleMovements[_i4], _bs);
-
-							v(_vert.x, _vert.y, -z);
-						}
-					}
-				}
-
-				var bs = bevelSize + bevelOffset; // Back facing vertices
-
-				for (var _i5 = 0; _i5 < vlen; _i5++) {
-					var _vert2 = bevelEnabled ? scalePt2(vertices[_i5], verticesMovements[_i5], bs) : vertices[_i5];
-
-					if (!extrudeByPath) {
-						v(_vert2.x, _vert2.y, 0);
-					} else {
-						// v( vert.x, vert.y + extrudePts[ 0 ].y, extrudePts[ 0 ].x );
-						normal.copy(splineTube.normals[0]).multiplyScalar(_vert2.x);
-						binormal.copy(splineTube.binormals[0]).multiplyScalar(_vert2.y);
-						position2.copy(extrudePts[0]).add(normal).add(binormal);
-						v(position2.x, position2.y, position2.z);
-					}
-				} // Add stepped vertices...
-				// Including front facing vertices
-
-
-				for (var s = 1; s <= steps; s++) {
-					for (var _i6 = 0; _i6 < vlen; _i6++) {
-						var _vert3 = bevelEnabled ? scalePt2(vertices[_i6], verticesMovements[_i6], bs) : vertices[_i6];
-
-						if (!extrudeByPath) {
-							v(_vert3.x, _vert3.y, depth / steps * s);
-						} else {
-							// v( vert.x, vert.y + extrudePts[ s - 1 ].y, extrudePts[ s - 1 ].x );
-							normal.copy(splineTube.normals[s]).multiplyScalar(_vert3.x);
-							binormal.copy(splineTube.binormals[s]).multiplyScalar(_vert3.y);
-							position2.copy(extrudePts[s]).add(normal).add(binormal);
-							v(position2.x, position2.y, position2.z);
-						}
-					}
-				} // Add bevel segments planes
-				//for ( b = 1; b <= bevelSegments; b ++ ) {
-
-
-				for (var _b = bevelSegments - 1; _b >= 0; _b--) {
-					var _t = _b / bevelSegments;
-
-					var _z = bevelThickness * Math.cos(_t * Math.PI / 2);
-
-					var _bs2 = bevelSize * Math.sin(_t * Math.PI / 2) + bevelOffset; // contract shape
-
-
-					for (var _i7 = 0, _il4 = contour.length; _i7 < _il4; _i7++) {
-						var _vert4 = scalePt2(contour[_i7], contourMovements[_i7], _bs2);
-
-						v(_vert4.x, _vert4.y, depth + _z);
-					} // expand holes
-
-
-					for (var _h4 = 0, _hl4 = holes.length; _h4 < _hl4; _h4++) {
-						var _ahole4 = holes[_h4];
-						oneHoleMovements = holesMovements[_h4];
-
-						for (var _i8 = 0, _il5 = _ahole4.length; _i8 < _il5; _i8++) {
-							var _vert5 = scalePt2(_ahole4[_i8], oneHoleMovements[_i8], _bs2);
-
-							if (!extrudeByPath) {
-								v(_vert5.x, _vert5.y, depth + _z);
-							} else {
-								v(_vert5.x, _vert5.y + extrudePts[steps - 1].y, extrudePts[steps - 1].x + _z);
-							}
-						}
-					}
-				}
-				/* Faces */
-				// Top and bottom faces
-
-
-				buildLidFaces(); // Sides faces
-
-				buildSideFaces(); /////	Internal functions
-
-				function buildLidFaces() {
-					var start = verticesArray.length / 3;
-
-					if (bevelEnabled) {
-						var layer = 0; // steps + 1
-
-						var offset = vlen * layer; // Bottom faces
-
-						for (var _i9 = 0; _i9 < flen; _i9++) {
-							var face = faces[_i9];
-							f3(face[2] + offset, face[1] + offset, face[0] + offset);
-						}
-
-						layer = steps + bevelSegments * 2;
-						offset = vlen * layer; // Top faces
-
-						for (var _i10 = 0; _i10 < flen; _i10++) {
-							var _face = faces[_i10];
-							f3(_face[0] + offset, _face[1] + offset, _face[2] + offset);
-						}
-					} else {
-						// Bottom faces
-						for (var _i11 = 0; _i11 < flen; _i11++) {
-							var _face2 = faces[_i11];
-							f3(_face2[2], _face2[1], _face2[0]);
-						} // Top faces
-
-
-						for (var _i12 = 0; _i12 < flen; _i12++) {
-							var _face3 = faces[_i12];
-							f3(_face3[0] + vlen * steps, _face3[1] + vlen * steps, _face3[2] + vlen * steps);
-						}
-					}
-
-					scope.addGroup(start, verticesArray.length / 3 - start, 0);
-				} // Create faces for the z-sides of the shape
-
-
-				function buildSideFaces() {
-					var start = verticesArray.length / 3;
-					var layeroffset = 0;
-					sidewalls(contour, layeroffset);
-					layeroffset += contour.length;
-
-					for (var _h5 = 0, _hl5 = holes.length; _h5 < _hl5; _h5++) {
-						var _ahole5 = holes[_h5];
-						sidewalls(_ahole5, layeroffset); //, true
-
-						layeroffset += _ahole5.length;
-					}
-
-					scope.addGroup(start, verticesArray.length / 3 - start, 1);
-				}
-
-				function sidewalls(contour, layeroffset) {
-					var i = contour.length;
-
-					while (--i >= 0) {
-						var _j2 = i;
-
-						var _k2 = i - 1;
-
-						if (_k2 < 0) _k2 = contour.length - 1; //console.log('b', i,j, i-1, k,vertices.length);
-
-						for (var _s = 0, sl = steps + bevelSegments * 2; _s < sl; _s++) {
-							var slen1 = vlen * _s;
-							var slen2 = vlen * (_s + 1);
-
-							var a = layeroffset + _j2 + slen1,
-									_b2 = layeroffset + _k2 + slen1,
-									c = layeroffset + _k2 + slen2,
-									d = layeroffset + _j2 + slen2;
-
-							f4(a, _b2, c, d);
-						}
-					}
-				}
-
-				function v(x, y, z) {
-					placeholder.push(x);
-					placeholder.push(y);
-					placeholder.push(z);
-				}
-
-				function f3(a, b, c) {
-					addVertex(a);
-					addVertex(b);
-					addVertex(c);
-					var nextIndex = verticesArray.length / 3;
-					var uvs = uvgen.generateTopUV(scope, verticesArray, nextIndex - 3, nextIndex - 2, nextIndex - 1);
-					addUV(uvs[0]);
-					addUV(uvs[1]);
-					addUV(uvs[2]);
-				}
-
-				function f4(a, b, c, d) {
-					addVertex(a);
-					addVertex(b);
-					addVertex(d);
-					addVertex(b);
-					addVertex(c);
-					addVertex(d);
-					var nextIndex = verticesArray.length / 3;
-					var uvs = uvgen.generateSideWallUV(scope, verticesArray, nextIndex - 6, nextIndex - 3, nextIndex - 2, nextIndex - 1);
-					addUV(uvs[0]);
-					addUV(uvs[1]);
-					addUV(uvs[3]);
-					addUV(uvs[1]);
-					addUV(uvs[2]);
-					addUV(uvs[3]);
-				}
-
-				function addVertex(index) {
-					verticesArray.push(placeholder[index * 3 + 0]);
-					verticesArray.push(placeholder[index * 3 + 1]);
-					verticesArray.push(placeholder[index * 3 + 2]);
-				}
-
-				function addUV(vector2) {
-					uvArray.push(vector2.x);
-					uvArray.push(vector2.y);
-				}
-			}
-
-			return _this;
-		}
-
-		var _proto = ExtrudeBufferGeometry.prototype;
-
-		_proto.toJSON = function toJSON() {
-			var data = BufferGeometry.prototype.toJSON.call(this);
-			var shapes = this.parameters.shapes;
-			var options = this.parameters.options;
-			return _toJSON(shapes, options, data);
-		};
-
-		return ExtrudeBufferGeometry;
-	}(BufferGeometry);
-
-	var WorldUVGenerator = {
-		generateTopUV: function generateTopUV(geometry, vertices, indexA, indexB, indexC) {
-			var a_x = vertices[indexA * 3];
-			var a_y = vertices[indexA * 3 + 1];
-			var b_x = vertices[indexB * 3];
-			var b_y = vertices[indexB * 3 + 1];
-			var c_x = vertices[indexC * 3];
-			var c_y = vertices[indexC * 3 + 1];
-			return [new Vector2(a_x, a_y), new Vector2(b_x, b_y), new Vector2(c_x, c_y)];
-		},
-		generateSideWallUV: function generateSideWallUV(geometry, vertices, indexA, indexB, indexC, indexD) {
-			var a_x = vertices[indexA * 3];
-			var a_y = vertices[indexA * 3 + 1];
-			var a_z = vertices[indexA * 3 + 2];
-			var b_x = vertices[indexB * 3];
-			var b_y = vertices[indexB * 3 + 1];
-			var b_z = vertices[indexB * 3 + 2];
-			var c_x = vertices[indexC * 3];
-			var c_y = vertices[indexC * 3 + 1];
-			var c_z = vertices[indexC * 3 + 2];
-			var d_x = vertices[indexD * 3];
-			var d_y = vertices[indexD * 3 + 1];
-			var d_z = vertices[indexD * 3 + 2];
-
-			if (Math.abs(a_y - b_y) < 0.01) {
-				return [new Vector2(a_x, 1 - a_z), new Vector2(b_x, 1 - b_z), new Vector2(c_x, 1 - c_z), new Vector2(d_x, 1 - d_z)];
-			} else {
-				return [new Vector2(a_y, 1 - a_z), new Vector2(b_y, 1 - b_z), new Vector2(c_y, 1 - c_z), new Vector2(d_y, 1 - d_z)];
-			}
-		}
-	};
-
-	function _toJSON(shapes, options, data) {
-		data.shapes = [];
-
-		if (Array.isArray(shapes)) {
-			for (var i = 0, l = shapes.length; i < l; i++) {
-				var shape = shapes[i];
-				data.shapes.push(shape.uuid);
-			}
-		} else {
-			data.shapes.push(shapes.uuid);
-		}
-
-		if (options.extrudePath !== undefined) data.options.extrudePath = options.extrudePath.toJSON();
-		return data;
-	}
-
 	var ExtrudeGeometry = /*#__PURE__*/function (_Geometry) {
 		_inheritsLoose(ExtrudeGeometry, _Geometry);
 
@@ -22965,13 +24672,13 @@
 
 			var shapes = this.parameters.shapes;
 			var options = this.parameters.options;
-			return _toJSON$1(shapes, options, data);
+			return _toJSON$3(shapes, options, data);
 		};
 
 		return ExtrudeGeometry;
 	}(Geometry);
 
-	function _toJSON$1(shapes, options, data) {
+	function _toJSON$3(shapes, options, data) {
 		data.shapes = [];
 
 		if (Array.isArray(shapes)) {
@@ -23473,177 +25180,6 @@
 
 		return RingGeometry;
 	}(Geometry);
-
-	var ShapeBufferGeometry = /*#__PURE__*/function (_BufferGeometry) {
-		_inheritsLoose(ShapeBufferGeometry, _BufferGeometry);
-
-		function ShapeBufferGeometry(shapes, curveSegments) {
-			var _this;
-
-			_this = _BufferGeometry.call(this) || this;
-			_this.type = 'ShapeBufferGeometry';
-			_this.parameters = {
-				shapes: shapes,
-				curveSegments: curveSegments
-			};
-			curveSegments = curveSegments || 12; // buffers
-
-			var indices = [];
-			var vertices = [];
-			var normals = [];
-			var uvs = []; // helper variables
-
-			var groupStart = 0;
-			var groupCount = 0; // allow single and array values for "shapes" parameter
-
-			if (Array.isArray(shapes) === false) {
-				addShape(shapes);
-			} else {
-				for (var i = 0; i < shapes.length; i++) {
-					addShape(shapes[i]);
-
-					_this.addGroup(groupStart, groupCount, i); // enables MultiMaterial support
-
-
-					groupStart += groupCount;
-					groupCount = 0;
-				}
-			} // build geometry
-
-
-			_this.setIndex(indices);
-
-			_this.setAttribute('position', new Float32BufferAttribute(vertices, 3));
-
-			_this.setAttribute('normal', new Float32BufferAttribute(normals, 3));
-
-			_this.setAttribute('uv', new Float32BufferAttribute(uvs, 2)); // helper functions
-
-
-			function addShape(shape) {
-				var indexOffset = vertices.length / 3;
-				var points = shape.extractPoints(curveSegments);
-				var shapeVertices = points.shape;
-				var shapeHoles = points.holes; // check direction of vertices
-
-				if (ShapeUtils.isClockWise(shapeVertices) === false) {
-					shapeVertices = shapeVertices.reverse();
-				}
-
-				for (var _i = 0, l = shapeHoles.length; _i < l; _i++) {
-					var shapeHole = shapeHoles[_i];
-
-					if (ShapeUtils.isClockWise(shapeHole) === true) {
-						shapeHoles[_i] = shapeHole.reverse();
-					}
-				}
-
-				var faces = ShapeUtils.triangulateShape(shapeVertices, shapeHoles); // join vertices of inner and outer paths to a single array
-
-				for (var _i2 = 0, _l = shapeHoles.length; _i2 < _l; _i2++) {
-					var _shapeHole = shapeHoles[_i2];
-					shapeVertices = shapeVertices.concat(_shapeHole);
-				} // vertices, normals, uvs
-
-
-				for (var _i3 = 0, _l2 = shapeVertices.length; _i3 < _l2; _i3++) {
-					var vertex = shapeVertices[_i3];
-					vertices.push(vertex.x, vertex.y, 0);
-					normals.push(0, 0, 1);
-					uvs.push(vertex.x, vertex.y); // world uvs
-				} // incides
-
-
-				for (var _i4 = 0, _l3 = faces.length; _i4 < _l3; _i4++) {
-					var face = faces[_i4];
-					var a = face[0] + indexOffset;
-					var b = face[1] + indexOffset;
-					var c = face[2] + indexOffset;
-					indices.push(a, b, c);
-					groupCount += 3;
-				}
-			}
-
-			return _this;
-		}
-
-		var _proto = ShapeBufferGeometry.prototype;
-
-		_proto.toJSON = function toJSON() {
-			var data = BufferGeometry.prototype.toJSON.call(this);
-			var shapes = this.parameters.shapes;
-			return _toJSON$2(shapes, data);
-		};
-
-		return ShapeBufferGeometry;
-	}(BufferGeometry);
-
-	function _toJSON$2(shapes, data) {
-		data.shapes = [];
-
-		if (Array.isArray(shapes)) {
-			for (var i = 0, l = shapes.length; i < l; i++) {
-				var shape = shapes[i];
-				data.shapes.push(shape.uuid);
-			}
-		} else {
-			data.shapes.push(shapes.uuid);
-		}
-
-		return data;
-	}
-
-	var ShapeGeometry = /*#__PURE__*/function (_Geometry) {
-		_inheritsLoose(ShapeGeometry, _Geometry);
-
-		function ShapeGeometry(shapes, curveSegments) {
-			var _this;
-
-			_this = _Geometry.call(this) || this;
-			_this.type = 'ShapeGeometry';
-
-			if (typeof curveSegments === 'object') {
-				console.warn('THREE.ShapeGeometry: Options parameter has been removed.');
-				curveSegments = curveSegments.curveSegments;
-			}
-
-			_this.parameters = {
-				shapes: shapes,
-				curveSegments: curveSegments
-			};
-
-			_this.fromBufferGeometry(new ShapeBufferGeometry(shapes, curveSegments));
-
-			_this.mergeVertices();
-
-			return _this;
-		}
-
-		var _proto = ShapeGeometry.prototype;
-
-		_proto.toJSON = function toJSON() {
-			var data = Geometry.prototype.toJSON.call(this);
-			var shapes = this.parameters.shapes;
-			return _toJSON$3(shapes, data);
-		};
-
-		return ShapeGeometry;
-	}(Geometry);
-
-	function _toJSON$3(shapes, data) {
-		data.shapes = [];
-
-		if (Array.isArray(shapes)) {
-			for (var i = 0, l = shapes.length; i < l; i++) {
-				var shape = shapes[i];
-				data.shapes.push(shape.uuid);
-			}
-		} else {
-			data.shapes.push(shapes.uuid);
-		}
-
-		return data;
-	}
 
 	var SphereBufferGeometry = /*#__PURE__*/function (_BufferGeometry) {
 		_inheritsLoose(SphereBufferGeometry, _BufferGeometry);
@@ -24692,134 +26228,6 @@
 
 		this.transmission = source.transmission;
 		this.transmissionMap = source.transmissionMap;
-		return this;
-	};
-
-	/**
-	 * parameters = {
-	 *	color: <hex>,
-	 *	specular: <hex>,
-	 *	shininess: <float>,
-	 *	opacity: <float>,
-	 *
-	 *	map: new THREE.Texture( <Image> ),
-	 *
-	 *	lightMap: new THREE.Texture( <Image> ),
-	 *	lightMapIntensity: <float>
-	 *
-	 *	aoMap: new THREE.Texture( <Image> ),
-	 *	aoMapIntensity: <float>
-	 *
-	 *	emissive: <hex>,
-	 *	emissiveIntensity: <float>
-	 *	emissiveMap: new THREE.Texture( <Image> ),
-	 *
-	 *	bumpMap: new THREE.Texture( <Image> ),
-	 *	bumpScale: <float>,
-	 *
-	 *	normalMap: new THREE.Texture( <Image> ),
-	 *	normalMapType: THREE.TangentSpaceNormalMap,
-	 *	normalScale: <Vector2>,
-	 *
-	 *	displacementMap: new THREE.Texture( <Image> ),
-	 *	displacementScale: <float>,
-	 *	displacementBias: <float>,
-	 *
-	 *	specularMap: new THREE.Texture( <Image> ),
-	 *
-	 *	alphaMap: new THREE.Texture( <Image> ),
-	 *
-	 *	envMap: new THREE.CubeTexture( [posx, negx, posy, negy, posz, negz] ),
-	 *	combine: THREE.MultiplyOperation,
-	 *	reflectivity: <float>,
-	 *	refractionRatio: <float>,
-	 *
-	 *	wireframe: <boolean>,
-	 *	wireframeLinewidth: <float>,
-	 *
-	 *	skinning: <bool>,
-	 *	morphTargets: <bool>,
-	 *	morphNormals: <bool>
-	 * }
-	 */
-
-	function MeshPhongMaterial(parameters) {
-		Material.call(this);
-		this.type = 'MeshPhongMaterial';
-		this.color = new Color(0xffffff); // diffuse
-
-		this.specular = new Color(0x111111);
-		this.shininess = 30;
-		this.map = null;
-		this.lightMap = null;
-		this.lightMapIntensity = 1.0;
-		this.aoMap = null;
-		this.aoMapIntensity = 1.0;
-		this.emissive = new Color(0x000000);
-		this.emissiveIntensity = 1.0;
-		this.emissiveMap = null;
-		this.bumpMap = null;
-		this.bumpScale = 1;
-		this.normalMap = null;
-		this.normalMapType = TangentSpaceNormalMap;
-		this.normalScale = new Vector2(1, 1);
-		this.displacementMap = null;
-		this.displacementScale = 1;
-		this.displacementBias = 0;
-		this.specularMap = null;
-		this.alphaMap = null;
-		this.envMap = null;
-		this.combine = MultiplyOperation;
-		this.reflectivity = 1;
-		this.refractionRatio = 0.98;
-		this.wireframe = false;
-		this.wireframeLinewidth = 1;
-		this.wireframeLinecap = 'round';
-		this.wireframeLinejoin = 'round';
-		this.skinning = false;
-		this.morphTargets = false;
-		this.morphNormals = false;
-		this.setValues(parameters);
-	}
-
-	MeshPhongMaterial.prototype = Object.create(Material.prototype);
-	MeshPhongMaterial.prototype.constructor = MeshPhongMaterial;
-	MeshPhongMaterial.prototype.isMeshPhongMaterial = true;
-
-	MeshPhongMaterial.prototype.copy = function (source) {
-		Material.prototype.copy.call(this, source);
-		this.color.copy(source.color);
-		this.specular.copy(source.specular);
-		this.shininess = source.shininess;
-		this.map = source.map;
-		this.lightMap = source.lightMap;
-		this.lightMapIntensity = source.lightMapIntensity;
-		this.aoMap = source.aoMap;
-		this.aoMapIntensity = source.aoMapIntensity;
-		this.emissive.copy(source.emissive);
-		this.emissiveMap = source.emissiveMap;
-		this.emissiveIntensity = source.emissiveIntensity;
-		this.bumpMap = source.bumpMap;
-		this.bumpScale = source.bumpScale;
-		this.normalMap = source.normalMap;
-		this.normalMapType = source.normalMapType;
-		this.normalScale.copy(source.normalScale);
-		this.displacementMap = source.displacementMap;
-		this.displacementScale = source.displacementScale;
-		this.displacementBias = source.displacementBias;
-		this.specularMap = source.specularMap;
-		this.alphaMap = source.alphaMap;
-		this.envMap = source.envMap;
-		this.combine = source.combine;
-		this.reflectivity = source.reflectivity;
-		this.refractionRatio = source.refractionRatio;
-		this.wireframe = source.wireframe;
-		this.wireframeLinewidth = source.wireframeLinewidth;
-		this.wireframeLinecap = source.wireframeLinecap;
-		this.wireframeLinejoin = source.wireframeLinejoin;
-		this.skinning = source.skinning;
-		this.morphTargets = source.morphTargets;
-		this.morphNormals = source.morphNormals;
 		return this;
 	};
 
@@ -27178,1335 +28586,6 @@
 				}
 			}, onProgress, onError);
 			return texture;
-		}
-	});
-
-	/**
-	 * Extensible curve object.
-	 *
-	 * Some common of curve methods:
-	 * .getPoint( t, optionalTarget ), .getTangent( t, optionalTarget )
-	 * .getPointAt( u, optionalTarget ), .getTangentAt( u, optionalTarget )
-	 * .getPoints(), .getSpacedPoints()
-	 * .getLength()
-	 * .updateArcLengths()
-	 *
-	 * This following curves inherit from THREE.Curve:
-	 *
-	 * -- 2D curves --
-	 * THREE.ArcCurve
-	 * THREE.CubicBezierCurve
-	 * THREE.EllipseCurve
-	 * THREE.LineCurve
-	 * THREE.QuadraticBezierCurve
-	 * THREE.SplineCurve
-	 *
-	 * -- 3D curves --
-	 * THREE.CatmullRomCurve3
-	 * THREE.CubicBezierCurve3
-	 * THREE.LineCurve3
-	 * THREE.QuadraticBezierCurve3
-	 *
-	 * A series of curves can be represented as a THREE.CurvePath.
-	 *
-	 **/
-
-	function Curve() {
-		this.type = 'Curve';
-		this.arcLengthDivisions = 200;
-	}
-
-	Object.assign(Curve.prototype, {
-		// Virtual base class method to overwrite and implement in subclasses
-		//	- t [0 .. 1]
-		getPoint: function getPoint()
-		/* t, optionalTarget */
-		{
-			console.warn('THREE.Curve: .getPoint() not implemented.');
-			return null;
-		},
-		// Get point at relative position in curve according to arc length
-		// - u [0 .. 1]
-		getPointAt: function getPointAt(u, optionalTarget) {
-			var t = this.getUtoTmapping(u);
-			return this.getPoint(t, optionalTarget);
-		},
-		// Get sequence of points using getPoint( t )
-		getPoints: function getPoints(divisions) {
-			if (divisions === undefined) divisions = 5;
-			var points = [];
-
-			for (var d = 0; d <= divisions; d++) {
-				points.push(this.getPoint(d / divisions));
-			}
-
-			return points;
-		},
-		// Get sequence of points using getPointAt( u )
-		getSpacedPoints: function getSpacedPoints(divisions) {
-			if (divisions === undefined) divisions = 5;
-			var points = [];
-
-			for (var d = 0; d <= divisions; d++) {
-				points.push(this.getPointAt(d / divisions));
-			}
-
-			return points;
-		},
-		// Get total curve arc length
-		getLength: function getLength() {
-			var lengths = this.getLengths();
-			return lengths[lengths.length - 1];
-		},
-		// Get list of cumulative segment lengths
-		getLengths: function getLengths(divisions) {
-			if (divisions === undefined) divisions = this.arcLengthDivisions;
-
-			if (this.cacheArcLengths && this.cacheArcLengths.length === divisions + 1 && !this.needsUpdate) {
-				return this.cacheArcLengths;
-			}
-
-			this.needsUpdate = false;
-			var cache = [];
-			var current,
-					last = this.getPoint(0);
-			var sum = 0;
-			cache.push(0);
-
-			for (var p = 1; p <= divisions; p++) {
-				current = this.getPoint(p / divisions);
-				sum += current.distanceTo(last);
-				cache.push(sum);
-				last = current;
-			}
-
-			this.cacheArcLengths = cache;
-			return cache; // { sums: cache, sum: sum }; Sum is in the last element.
-		},
-		updateArcLengths: function updateArcLengths() {
-			this.needsUpdate = true;
-			this.getLengths();
-		},
-		// Given u ( 0 .. 1 ), get a t to find p. This gives you points which are equidistant
-		getUtoTmapping: function getUtoTmapping(u, distance) {
-			var arcLengths = this.getLengths();
-			var i = 0;
-			var il = arcLengths.length;
-			var targetArcLength; // The targeted u distance value to get
-
-			if (distance) {
-				targetArcLength = distance;
-			} else {
-				targetArcLength = u * arcLengths[il - 1];
-			} // binary search for the index with largest value smaller than target u distance
-
-
-			var low = 0,
-					high = il - 1,
-					comparison;
-
-			while (low <= high) {
-				i = Math.floor(low + (high - low) / 2); // less likely to overflow, though probably not issue here, JS doesn't really have integers, all numbers are floats
-
-				comparison = arcLengths[i] - targetArcLength;
-
-				if (comparison < 0) {
-					low = i + 1;
-				} else if (comparison > 0) {
-					high = i - 1;
-				} else {
-					high = i;
-					break; // DONE
-				}
-			}
-
-			i = high;
-
-			if (arcLengths[i] === targetArcLength) {
-				return i / (il - 1);
-			} // we could get finer grain at lengths, or use simple interpolation between two points
-
-
-			var lengthBefore = arcLengths[i];
-			var lengthAfter = arcLengths[i + 1];
-			var segmentLength = lengthAfter - lengthBefore; // determine where we are between the 'before' and 'after' points
-
-			var segmentFraction = (targetArcLength - lengthBefore) / segmentLength; // add that fractional amount to t
-
-			var t = (i + segmentFraction) / (il - 1);
-			return t;
-		},
-		// Returns a unit vector tangent at t
-		// In case any sub curve does not implement its tangent derivation,
-		// 2 points a small delta apart will be used to find its gradient
-		// which seems to give a reasonable approximation
-		getTangent: function getTangent(t, optionalTarget) {
-			var delta = 0.0001;
-			var t1 = t - delta;
-			var t2 = t + delta; // Capping in case of danger
-
-			if (t1 < 0) t1 = 0;
-			if (t2 > 1) t2 = 1;
-			var pt1 = this.getPoint(t1);
-			var pt2 = this.getPoint(t2);
-			var tangent = optionalTarget || (pt1.isVector2 ? new Vector2() : new Vector3());
-			tangent.copy(pt2).sub(pt1).normalize();
-			return tangent;
-		},
-		getTangentAt: function getTangentAt(u, optionalTarget) {
-			var t = this.getUtoTmapping(u);
-			return this.getTangent(t, optionalTarget);
-		},
-		computeFrenetFrames: function computeFrenetFrames(segments, closed) {
-			// see http://www.cs.indiana.edu/pub/techreports/TR425.pdf
-			var normal = new Vector3();
-			var tangents = [];
-			var normals = [];
-			var binormals = [];
-			var vec = new Vector3();
-			var mat = new Matrix4(); // compute the tangent vectors for each segment on the curve
-
-			for (var i = 0; i <= segments; i++) {
-				var u = i / segments;
-				tangents[i] = this.getTangentAt(u, new Vector3());
-				tangents[i].normalize();
-			} // select an initial normal vector perpendicular to the first tangent vector,
-			// and in the direction of the minimum tangent xyz component
-
-
-			normals[0] = new Vector3();
-			binormals[0] = new Vector3();
-			var min = Number.MAX_VALUE;
-			var tx = Math.abs(tangents[0].x);
-			var ty = Math.abs(tangents[0].y);
-			var tz = Math.abs(tangents[0].z);
-
-			if (tx <= min) {
-				min = tx;
-				normal.set(1, 0, 0);
-			}
-
-			if (ty <= min) {
-				min = ty;
-				normal.set(0, 1, 0);
-			}
-
-			if (tz <= min) {
-				normal.set(0, 0, 1);
-			}
-
-			vec.crossVectors(tangents[0], normal).normalize();
-			normals[0].crossVectors(tangents[0], vec);
-			binormals[0].crossVectors(tangents[0], normals[0]); // compute the slowly-varying normal and binormal vectors for each segment on the curve
-
-			for (var _i = 1; _i <= segments; _i++) {
-				normals[_i] = normals[_i - 1].clone();
-				binormals[_i] = binormals[_i - 1].clone();
-				vec.crossVectors(tangents[_i - 1], tangents[_i]);
-
-				if (vec.length() > Number.EPSILON) {
-					vec.normalize();
-					var theta = Math.acos(MathUtils.clamp(tangents[_i - 1].dot(tangents[_i]), -1, 1)); // clamp for floating pt errors
-
-					normals[_i].applyMatrix4(mat.makeRotationAxis(vec, theta));
-				}
-
-				binormals[_i].crossVectors(tangents[_i], normals[_i]);
-			} // if the curve is closed, postprocess the vectors so the first and last normal vectors are the same
-
-
-			if (closed === true) {
-				var _theta = Math.acos(MathUtils.clamp(normals[0].dot(normals[segments]), -1, 1));
-
-				_theta /= segments;
-
-				if (tangents[0].dot(vec.crossVectors(normals[0], normals[segments])) > 0) {
-					_theta = -_theta;
-				}
-
-				for (var _i2 = 1; _i2 <= segments; _i2++) {
-					// twist a little...
-					normals[_i2].applyMatrix4(mat.makeRotationAxis(tangents[_i2], _theta * _i2));
-
-					binormals[_i2].crossVectors(tangents[_i2], normals[_i2]);
-				}
-			}
-
-			return {
-				tangents: tangents,
-				normals: normals,
-				binormals: binormals
-			};
-		},
-		clone: function clone() {
-			return new this.constructor().copy(this);
-		},
-		copy: function copy(source) {
-			this.arcLengthDivisions = source.arcLengthDivisions;
-			return this;
-		},
-		toJSON: function toJSON() {
-			var data = {
-				metadata: {
-					version: 4.5,
-					type: 'Curve',
-					generator: 'Curve.toJSON'
-				}
-			};
-			data.arcLengthDivisions = this.arcLengthDivisions;
-			data.type = this.type;
-			return data;
-		},
-		fromJSON: function fromJSON(json) {
-			this.arcLengthDivisions = json.arcLengthDivisions;
-			return this;
-		}
-	});
-
-	function EllipseCurve(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
-		Curve.call(this);
-		this.type = 'EllipseCurve';
-		this.aX = aX || 0;
-		this.aY = aY || 0;
-		this.xRadius = xRadius || 1;
-		this.yRadius = yRadius || 1;
-		this.aStartAngle = aStartAngle || 0;
-		this.aEndAngle = aEndAngle || 2 * Math.PI;
-		this.aClockwise = aClockwise || false;
-		this.aRotation = aRotation || 0;
-	}
-
-	EllipseCurve.prototype = Object.create(Curve.prototype);
-	EllipseCurve.prototype.constructor = EllipseCurve;
-	EllipseCurve.prototype.isEllipseCurve = true;
-
-	EllipseCurve.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector2();
-		var twoPi = Math.PI * 2;
-		var deltaAngle = this.aEndAngle - this.aStartAngle;
-		var samePoints = Math.abs(deltaAngle) < Number.EPSILON; // ensures that deltaAngle is 0 .. 2 PI
-
-		while (deltaAngle < 0) {
-			deltaAngle += twoPi;
-		}
-
-		while (deltaAngle > twoPi) {
-			deltaAngle -= twoPi;
-		}
-
-		if (deltaAngle < Number.EPSILON) {
-			if (samePoints) {
-				deltaAngle = 0;
-			} else {
-				deltaAngle = twoPi;
-			}
-		}
-
-		if (this.aClockwise === true && !samePoints) {
-			if (deltaAngle === twoPi) {
-				deltaAngle = -twoPi;
-			} else {
-				deltaAngle = deltaAngle - twoPi;
-			}
-		}
-
-		var angle = this.aStartAngle + t * deltaAngle;
-		var x = this.aX + this.xRadius * Math.cos(angle);
-		var y = this.aY + this.yRadius * Math.sin(angle);
-
-		if (this.aRotation !== 0) {
-			var cos = Math.cos(this.aRotation);
-			var sin = Math.sin(this.aRotation);
-			var tx = x - this.aX;
-			var ty = y - this.aY; // Rotate the point about the center of the ellipse.
-
-			x = tx * cos - ty * sin + this.aX;
-			y = tx * sin + ty * cos + this.aY;
-		}
-
-		return point.set(x, y);
-	};
-
-	EllipseCurve.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.aX = source.aX;
-		this.aY = source.aY;
-		this.xRadius = source.xRadius;
-		this.yRadius = source.yRadius;
-		this.aStartAngle = source.aStartAngle;
-		this.aEndAngle = source.aEndAngle;
-		this.aClockwise = source.aClockwise;
-		this.aRotation = source.aRotation;
-		return this;
-	};
-
-	EllipseCurve.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.aX = this.aX;
-		data.aY = this.aY;
-		data.xRadius = this.xRadius;
-		data.yRadius = this.yRadius;
-		data.aStartAngle = this.aStartAngle;
-		data.aEndAngle = this.aEndAngle;
-		data.aClockwise = this.aClockwise;
-		data.aRotation = this.aRotation;
-		return data;
-	};
-
-	EllipseCurve.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.aX = json.aX;
-		this.aY = json.aY;
-		this.xRadius = json.xRadius;
-		this.yRadius = json.yRadius;
-		this.aStartAngle = json.aStartAngle;
-		this.aEndAngle = json.aEndAngle;
-		this.aClockwise = json.aClockwise;
-		this.aRotation = json.aRotation;
-		return this;
-	};
-
-	function ArcCurve(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
-		EllipseCurve.call(this, aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise);
-		this.type = 'ArcCurve';
-	}
-
-	ArcCurve.prototype = Object.create(EllipseCurve.prototype);
-	ArcCurve.prototype.constructor = ArcCurve;
-	ArcCurve.prototype.isArcCurve = true;
-
-	/**
-	 * Centripetal CatmullRom Curve - which is useful for avoiding
-	 * cusps and self-intersections in non-uniform catmull rom curves.
-	 * http://www.cemyuksel.com/research/catmullrom_param/catmullrom.pdf
-	 *
-	 * curve.type accepts centripetal(default), chordal and catmullrom
-	 * curve.tension is used for catmullrom which defaults to 0.5
-	 */
-
-	/*
-	Based on an optimized c++ solution in
-	 - http://stackoverflow.com/questions/9489736/catmull-rom-curve-with-no-cusps-and-no-self-intersections/
-	 - http://ideone.com/NoEbVM
-
-	This CubicPoly class could be used for reusing some variables and calculations,
-	but for three.js curve use, it could be possible inlined and flatten into a single function call
-	which can be placed in CurveUtils.
-	*/
-
-	function CubicPoly() {
-		var c0 = 0,
-				c1 = 0,
-				c2 = 0,
-				c3 = 0;
-		/*
-		 * Compute coefficients for a cubic polynomial
-		 *	 p(s) = c0 + c1*s + c2*s^2 + c3*s^3
-		 * such that
-		 *	 p(0) = x0, p(1) = x1
-		 *	and
-		 *	 p'(0) = t0, p'(1) = t1.
-		 */
-
-		function init(x0, x1, t0, t1) {
-			c0 = x0;
-			c1 = t0;
-			c2 = -3 * x0 + 3 * x1 - 2 * t0 - t1;
-			c3 = 2 * x0 - 2 * x1 + t0 + t1;
-		}
-
-		return {
-			initCatmullRom: function initCatmullRom(x0, x1, x2, x3, tension) {
-				init(x1, x2, tension * (x2 - x0), tension * (x3 - x1));
-			},
-			initNonuniformCatmullRom: function initNonuniformCatmullRom(x0, x1, x2, x3, dt0, dt1, dt2) {
-				// compute tangents when parameterized in [t1,t2]
-				var t1 = (x1 - x0) / dt0 - (x2 - x0) / (dt0 + dt1) + (x2 - x1) / dt1;
-				var t2 = (x2 - x1) / dt1 - (x3 - x1) / (dt1 + dt2) + (x3 - x2) / dt2; // rescale tangents for parametrization in [0,1]
-
-				t1 *= dt1;
-				t2 *= dt1;
-				init(x1, x2, t1, t2);
-			},
-			calc: function calc(t) {
-				var t2 = t * t;
-				var t3 = t2 * t;
-				return c0 + c1 * t + c2 * t2 + c3 * t3;
-			}
-		};
-	} //
-
-
-	var tmp = new Vector3();
-	var px = new CubicPoly(),
-			py = new CubicPoly(),
-			pz = new CubicPoly();
-
-	function CatmullRomCurve3(points, closed, curveType, tension) {
-		Curve.call(this);
-		this.type = 'CatmullRomCurve3';
-		this.points = points || [];
-		this.closed = closed || false;
-		this.curveType = curveType || 'centripetal';
-		this.tension = tension !== undefined ? tension : 0.5;
-	}
-
-	CatmullRomCurve3.prototype = Object.create(Curve.prototype);
-	CatmullRomCurve3.prototype.constructor = CatmullRomCurve3;
-	CatmullRomCurve3.prototype.isCatmullRomCurve3 = true;
-
-	CatmullRomCurve3.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector3();
-		var points = this.points;
-		var l = points.length;
-		var p = (l - (this.closed ? 0 : 1)) * t;
-		var intPoint = Math.floor(p);
-		var weight = p - intPoint;
-
-		if (this.closed) {
-			intPoint += intPoint > 0 ? 0 : (Math.floor(Math.abs(intPoint) / l) + 1) * l;
-		} else if (weight === 0 && intPoint === l - 1) {
-			intPoint = l - 2;
-			weight = 1;
-		}
-
-		var p0, p3; // 4 points (p1 & p2 defined below)
-
-		if (this.closed || intPoint > 0) {
-			p0 = points[(intPoint - 1) % l];
-		} else {
-			// extrapolate first point
-			tmp.subVectors(points[0], points[1]).add(points[0]);
-			p0 = tmp;
-		}
-
-		var p1 = points[intPoint % l];
-		var p2 = points[(intPoint + 1) % l];
-
-		if (this.closed || intPoint + 2 < l) {
-			p3 = points[(intPoint + 2) % l];
-		} else {
-			// extrapolate last point
-			tmp.subVectors(points[l - 1], points[l - 2]).add(points[l - 1]);
-			p3 = tmp;
-		}
-
-		if (this.curveType === 'centripetal' || this.curveType === 'chordal') {
-			// init Centripetal / Chordal Catmull-Rom
-			var pow = this.curveType === 'chordal' ? 0.5 : 0.25;
-			var dt0 = Math.pow(p0.distanceToSquared(p1), pow);
-			var dt1 = Math.pow(p1.distanceToSquared(p2), pow);
-			var dt2 = Math.pow(p2.distanceToSquared(p3), pow); // safety check for repeated points
-
-			if (dt1 < 1e-4) dt1 = 1.0;
-			if (dt0 < 1e-4) dt0 = dt1;
-			if (dt2 < 1e-4) dt2 = dt1;
-			px.initNonuniformCatmullRom(p0.x, p1.x, p2.x, p3.x, dt0, dt1, dt2);
-			py.initNonuniformCatmullRom(p0.y, p1.y, p2.y, p3.y, dt0, dt1, dt2);
-			pz.initNonuniformCatmullRom(p0.z, p1.z, p2.z, p3.z, dt0, dt1, dt2);
-		} else if (this.curveType === 'catmullrom') {
-			px.initCatmullRom(p0.x, p1.x, p2.x, p3.x, this.tension);
-			py.initCatmullRom(p0.y, p1.y, p2.y, p3.y, this.tension);
-			pz.initCatmullRom(p0.z, p1.z, p2.z, p3.z, this.tension);
-		}
-
-		point.set(px.calc(weight), py.calc(weight), pz.calc(weight));
-		return point;
-	};
-
-	CatmullRomCurve3.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.points = [];
-
-		for (var i = 0, l = source.points.length; i < l; i++) {
-			var point = source.points[i];
-			this.points.push(point.clone());
-		}
-
-		this.closed = source.closed;
-		this.curveType = source.curveType;
-		this.tension = source.tension;
-		return this;
-	};
-
-	CatmullRomCurve3.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.points = [];
-
-		for (var i = 0, l = this.points.length; i < l; i++) {
-			var point = this.points[i];
-			data.points.push(point.toArray());
-		}
-
-		data.closed = this.closed;
-		data.curveType = this.curveType;
-		data.tension = this.tension;
-		return data;
-	};
-
-	CatmullRomCurve3.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.points = [];
-
-		for (var i = 0, l = json.points.length; i < l; i++) {
-			var point = json.points[i];
-			this.points.push(new Vector3().fromArray(point));
-		}
-
-		this.closed = json.closed;
-		this.curveType = json.curveType;
-		this.tension = json.tension;
-		return this;
-	};
-
-	/**
-	 * Bezier Curves formulas obtained from
-	 * http://en.wikipedia.org/wiki/Bézier_curve
-	 */
-	function CatmullRom(t, p0, p1, p2, p3) {
-		var v0 = (p2 - p0) * 0.5;
-		var v1 = (p3 - p1) * 0.5;
-		var t2 = t * t;
-		var t3 = t * t2;
-		return (2 * p1 - 2 * p2 + v0 + v1) * t3 + (-3 * p1 + 3 * p2 - 2 * v0 - v1) * t2 + v0 * t + p1;
-	} //
-
-
-	function QuadraticBezierP0(t, p) {
-		var k = 1 - t;
-		return k * k * p;
-	}
-
-	function QuadraticBezierP1(t, p) {
-		return 2 * (1 - t) * t * p;
-	}
-
-	function QuadraticBezierP2(t, p) {
-		return t * t * p;
-	}
-
-	function QuadraticBezier(t, p0, p1, p2) {
-		return QuadraticBezierP0(t, p0) + QuadraticBezierP1(t, p1) + QuadraticBezierP2(t, p2);
-	} //
-
-
-	function CubicBezierP0(t, p) {
-		var k = 1 - t;
-		return k * k * k * p;
-	}
-
-	function CubicBezierP1(t, p) {
-		var k = 1 - t;
-		return 3 * k * k * t * p;
-	}
-
-	function CubicBezierP2(t, p) {
-		return 3 * (1 - t) * t * t * p;
-	}
-
-	function CubicBezierP3(t, p) {
-		return t * t * t * p;
-	}
-
-	function CubicBezier(t, p0, p1, p2, p3) {
-		return CubicBezierP0(t, p0) + CubicBezierP1(t, p1) + CubicBezierP2(t, p2) + CubicBezierP3(t, p3);
-	}
-
-	function CubicBezierCurve(v0, v1, v2, v3) {
-		Curve.call(this);
-		this.type = 'CubicBezierCurve';
-		this.v0 = v0 || new Vector2();
-		this.v1 = v1 || new Vector2();
-		this.v2 = v2 || new Vector2();
-		this.v3 = v3 || new Vector2();
-	}
-
-	CubicBezierCurve.prototype = Object.create(Curve.prototype);
-	CubicBezierCurve.prototype.constructor = CubicBezierCurve;
-	CubicBezierCurve.prototype.isCubicBezierCurve = true;
-
-	CubicBezierCurve.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector2();
-		var v0 = this.v0,
-				v1 = this.v1,
-				v2 = this.v2,
-				v3 = this.v3;
-		point.set(CubicBezier(t, v0.x, v1.x, v2.x, v3.x), CubicBezier(t, v0.y, v1.y, v2.y, v3.y));
-		return point;
-	};
-
-	CubicBezierCurve.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v0.copy(source.v0);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		this.v3.copy(source.v3);
-		return this;
-	};
-
-	CubicBezierCurve.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v0 = this.v0.toArray();
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		data.v3 = this.v3.toArray();
-		return data;
-	};
-
-	CubicBezierCurve.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v0.fromArray(json.v0);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		this.v3.fromArray(json.v3);
-		return this;
-	};
-
-	function CubicBezierCurve3(v0, v1, v2, v3) {
-		Curve.call(this);
-		this.type = 'CubicBezierCurve3';
-		this.v0 = v0 || new Vector3();
-		this.v1 = v1 || new Vector3();
-		this.v2 = v2 || new Vector3();
-		this.v3 = v3 || new Vector3();
-	}
-
-	CubicBezierCurve3.prototype = Object.create(Curve.prototype);
-	CubicBezierCurve3.prototype.constructor = CubicBezierCurve3;
-	CubicBezierCurve3.prototype.isCubicBezierCurve3 = true;
-
-	CubicBezierCurve3.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector3();
-		var v0 = this.v0,
-				v1 = this.v1,
-				v2 = this.v2,
-				v3 = this.v3;
-		point.set(CubicBezier(t, v0.x, v1.x, v2.x, v3.x), CubicBezier(t, v0.y, v1.y, v2.y, v3.y), CubicBezier(t, v0.z, v1.z, v2.z, v3.z));
-		return point;
-	};
-
-	CubicBezierCurve3.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v0.copy(source.v0);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		this.v3.copy(source.v3);
-		return this;
-	};
-
-	CubicBezierCurve3.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v0 = this.v0.toArray();
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		data.v3 = this.v3.toArray();
-		return data;
-	};
-
-	CubicBezierCurve3.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v0.fromArray(json.v0);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		this.v3.fromArray(json.v3);
-		return this;
-	};
-
-	function LineCurve(v1, v2) {
-		Curve.call(this);
-		this.type = 'LineCurve';
-		this.v1 = v1 || new Vector2();
-		this.v2 = v2 || new Vector2();
-	}
-
-	LineCurve.prototype = Object.create(Curve.prototype);
-	LineCurve.prototype.constructor = LineCurve;
-	LineCurve.prototype.isLineCurve = true;
-
-	LineCurve.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector2();
-
-		if (t === 1) {
-			point.copy(this.v2);
-		} else {
-			point.copy(this.v2).sub(this.v1);
-			point.multiplyScalar(t).add(this.v1);
-		}
-
-		return point;
-	}; // Line curve is linear, so we can overwrite default getPointAt
-
-
-	LineCurve.prototype.getPointAt = function (u, optionalTarget) {
-		return this.getPoint(u, optionalTarget);
-	};
-
-	LineCurve.prototype.getTangent = function (t, optionalTarget) {
-		var tangent = optionalTarget || new Vector2();
-		tangent.copy(this.v2).sub(this.v1).normalize();
-		return tangent;
-	};
-
-	LineCurve.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		return this;
-	};
-
-	LineCurve.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		return data;
-	};
-
-	LineCurve.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		return this;
-	};
-
-	function LineCurve3(v1, v2) {
-		Curve.call(this);
-		this.type = 'LineCurve3';
-		this.v1 = v1 || new Vector3();
-		this.v2 = v2 || new Vector3();
-	}
-
-	LineCurve3.prototype = Object.create(Curve.prototype);
-	LineCurve3.prototype.constructor = LineCurve3;
-	LineCurve3.prototype.isLineCurve3 = true;
-
-	LineCurve3.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector3();
-
-		if (t === 1) {
-			point.copy(this.v2);
-		} else {
-			point.copy(this.v2).sub(this.v1);
-			point.multiplyScalar(t).add(this.v1);
-		}
-
-		return point;
-	}; // Line curve is linear, so we can overwrite default getPointAt
-
-
-	LineCurve3.prototype.getPointAt = function (u, optionalTarget) {
-		return this.getPoint(u, optionalTarget);
-	};
-
-	LineCurve3.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		return this;
-	};
-
-	LineCurve3.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		return data;
-	};
-
-	LineCurve3.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		return this;
-	};
-
-	function QuadraticBezierCurve(v0, v1, v2) {
-		Curve.call(this);
-		this.type = 'QuadraticBezierCurve';
-		this.v0 = v0 || new Vector2();
-		this.v1 = v1 || new Vector2();
-		this.v2 = v2 || new Vector2();
-	}
-
-	QuadraticBezierCurve.prototype = Object.create(Curve.prototype);
-	QuadraticBezierCurve.prototype.constructor = QuadraticBezierCurve;
-	QuadraticBezierCurve.prototype.isQuadraticBezierCurve = true;
-
-	QuadraticBezierCurve.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector2();
-		var v0 = this.v0,
-				v1 = this.v1,
-				v2 = this.v2;
-		point.set(QuadraticBezier(t, v0.x, v1.x, v2.x), QuadraticBezier(t, v0.y, v1.y, v2.y));
-		return point;
-	};
-
-	QuadraticBezierCurve.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v0.copy(source.v0);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		return this;
-	};
-
-	QuadraticBezierCurve.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v0 = this.v0.toArray();
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		return data;
-	};
-
-	QuadraticBezierCurve.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v0.fromArray(json.v0);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		return this;
-	};
-
-	function QuadraticBezierCurve3(v0, v1, v2) {
-		Curve.call(this);
-		this.type = 'QuadraticBezierCurve3';
-		this.v0 = v0 || new Vector3();
-		this.v1 = v1 || new Vector3();
-		this.v2 = v2 || new Vector3();
-	}
-
-	QuadraticBezierCurve3.prototype = Object.create(Curve.prototype);
-	QuadraticBezierCurve3.prototype.constructor = QuadraticBezierCurve3;
-	QuadraticBezierCurve3.prototype.isQuadraticBezierCurve3 = true;
-
-	QuadraticBezierCurve3.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector3();
-		var v0 = this.v0,
-				v1 = this.v1,
-				v2 = this.v2;
-		point.set(QuadraticBezier(t, v0.x, v1.x, v2.x), QuadraticBezier(t, v0.y, v1.y, v2.y), QuadraticBezier(t, v0.z, v1.z, v2.z));
-		return point;
-	};
-
-	QuadraticBezierCurve3.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.v0.copy(source.v0);
-		this.v1.copy(source.v1);
-		this.v2.copy(source.v2);
-		return this;
-	};
-
-	QuadraticBezierCurve3.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.v0 = this.v0.toArray();
-		data.v1 = this.v1.toArray();
-		data.v2 = this.v2.toArray();
-		return data;
-	};
-
-	QuadraticBezierCurve3.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.v0.fromArray(json.v0);
-		this.v1.fromArray(json.v1);
-		this.v2.fromArray(json.v2);
-		return this;
-	};
-
-	function SplineCurve(points) {
-		Curve.call(this);
-		this.type = 'SplineCurve';
-		this.points = points || [];
-	}
-
-	SplineCurve.prototype = Object.create(Curve.prototype);
-	SplineCurve.prototype.constructor = SplineCurve;
-	SplineCurve.prototype.isSplineCurve = true;
-
-	SplineCurve.prototype.getPoint = function (t, optionalTarget) {
-		var point = optionalTarget || new Vector2();
-		var points = this.points;
-		var p = (points.length - 1) * t;
-		var intPoint = Math.floor(p);
-		var weight = p - intPoint;
-		var p0 = points[intPoint === 0 ? intPoint : intPoint - 1];
-		var p1 = points[intPoint];
-		var p2 = points[intPoint > points.length - 2 ? points.length - 1 : intPoint + 1];
-		var p3 = points[intPoint > points.length - 3 ? points.length - 1 : intPoint + 2];
-		point.set(CatmullRom(weight, p0.x, p1.x, p2.x, p3.x), CatmullRom(weight, p0.y, p1.y, p2.y, p3.y));
-		return point;
-	};
-
-	SplineCurve.prototype.copy = function (source) {
-		Curve.prototype.copy.call(this, source);
-		this.points = [];
-
-		for (var i = 0, l = source.points.length; i < l; i++) {
-			var point = source.points[i];
-			this.points.push(point.clone());
-		}
-
-		return this;
-	};
-
-	SplineCurve.prototype.toJSON = function () {
-		var data = Curve.prototype.toJSON.call(this);
-		data.points = [];
-
-		for (var i = 0, l = this.points.length; i < l; i++) {
-			var point = this.points[i];
-			data.points.push(point.toArray());
-		}
-
-		return data;
-	};
-
-	SplineCurve.prototype.fromJSON = function (json) {
-		Curve.prototype.fromJSON.call(this, json);
-		this.points = [];
-
-		for (var i = 0, l = json.points.length; i < l; i++) {
-			var point = json.points[i];
-			this.points.push(new Vector2().fromArray(point));
-		}
-
-		return this;
-	};
-
-	var Curves = /*#__PURE__*/Object.freeze({
-		__proto__: null,
-		ArcCurve: ArcCurve,
-		CatmullRomCurve3: CatmullRomCurve3,
-		CubicBezierCurve: CubicBezierCurve,
-		CubicBezierCurve3: CubicBezierCurve3,
-		EllipseCurve: EllipseCurve,
-		LineCurve: LineCurve,
-		LineCurve3: LineCurve3,
-		QuadraticBezierCurve: QuadraticBezierCurve,
-		QuadraticBezierCurve3: QuadraticBezierCurve3,
-		SplineCurve: SplineCurve
-	});
-
-	/**************************************************************
-	 *	Curved Path - a curve path is simply a array of connected
-	 *	curves, but retains the api of a curve
-	 **************************************************************/
-
-	function CurvePath() {
-		Curve.call(this);
-		this.type = 'CurvePath';
-		this.curves = [];
-		this.autoClose = false; // Automatically closes the path
-	}
-
-	CurvePath.prototype = Object.assign(Object.create(Curve.prototype), {
-		constructor: CurvePath,
-		add: function add(curve) {
-			this.curves.push(curve);
-		},
-		closePath: function closePath() {
-			// Add a line curve if start and end of lines are not connected
-			var startPoint = this.curves[0].getPoint(0);
-			var endPoint = this.curves[this.curves.length - 1].getPoint(1);
-
-			if (!startPoint.equals(endPoint)) {
-				this.curves.push(new LineCurve(endPoint, startPoint));
-			}
-		},
-		// To get accurate point with reference to
-		// entire path distance at time t,
-		// following has to be done:
-		// 1. Length of each sub path have to be known
-		// 2. Locate and identify type of curve
-		// 3. Get t for the curve
-		// 4. Return curve.getPointAt(t')
-		getPoint: function getPoint(t) {
-			var d = t * this.getLength();
-			var curveLengths = this.getCurveLengths();
-			var i = 0; // To think about boundaries points.
-
-			while (i < curveLengths.length) {
-				if (curveLengths[i] >= d) {
-					var diff = curveLengths[i] - d;
-					var curve = this.curves[i];
-					var segmentLength = curve.getLength();
-					var u = segmentLength === 0 ? 0 : 1 - diff / segmentLength;
-					return curve.getPointAt(u);
-				}
-
-				i++;
-			}
-
-			return null; // loop where sum != 0, sum > d , sum+1 <d
-		},
-		// We cannot use the default THREE.Curve getPoint() with getLength() because in
-		// THREE.Curve, getLength() depends on getPoint() but in THREE.CurvePath
-		// getPoint() depends on getLength
-		getLength: function getLength() {
-			var lens = this.getCurveLengths();
-			return lens[lens.length - 1];
-		},
-		// cacheLengths must be recalculated.
-		updateArcLengths: function updateArcLengths() {
-			this.needsUpdate = true;
-			this.cacheLengths = null;
-			this.getCurveLengths();
-		},
-		// Compute lengths and cache them
-		// We cannot overwrite getLengths() because UtoT mapping uses it.
-		getCurveLengths: function getCurveLengths() {
-			// We use cache values if curves and cache array are same length
-			if (this.cacheLengths && this.cacheLengths.length === this.curves.length) {
-				return this.cacheLengths;
-			} // Get length of sub-curve
-			// Push sums into cached array
-
-
-			var lengths = [];
-			var sums = 0;
-
-			for (var i = 0, l = this.curves.length; i < l; i++) {
-				sums += this.curves[i].getLength();
-				lengths.push(sums);
-			}
-
-			this.cacheLengths = lengths;
-			return lengths;
-		},
-		getSpacedPoints: function getSpacedPoints(divisions) {
-			if (divisions === undefined) divisions = 40;
-			var points = [];
-
-			for (var i = 0; i <= divisions; i++) {
-				points.push(this.getPoint(i / divisions));
-			}
-
-			if (this.autoClose) {
-				points.push(points[0]);
-			}
-
-			return points;
-		},
-		getPoints: function getPoints(divisions) {
-			divisions = divisions || 12;
-			var points = [];
-			var last;
-
-			for (var i = 0, curves = this.curves; i < curves.length; i++) {
-				var curve = curves[i];
-				var resolution = curve && curve.isEllipseCurve ? divisions * 2 : curve && (curve.isLineCurve || curve.isLineCurve3) ? 1 : curve && curve.isSplineCurve ? divisions * curve.points.length : divisions;
-				var pts = curve.getPoints(resolution);
-
-				for (var j = 0; j < pts.length; j++) {
-					var point = pts[j];
-					if (last && last.equals(point)) continue; // ensures no consecutive points are duplicates
-
-					points.push(point);
-					last = point;
-				}
-			}
-
-			if (this.autoClose && points.length > 1 && !points[points.length - 1].equals(points[0])) {
-				points.push(points[0]);
-			}
-
-			return points;
-		},
-		copy: function copy(source) {
-			Curve.prototype.copy.call(this, source);
-			this.curves = [];
-
-			for (var i = 0, l = source.curves.length; i < l; i++) {
-				var curve = source.curves[i];
-				this.curves.push(curve.clone());
-			}
-
-			this.autoClose = source.autoClose;
-			return this;
-		},
-		toJSON: function toJSON() {
-			var data = Curve.prototype.toJSON.call(this);
-			data.autoClose = this.autoClose;
-			data.curves = [];
-
-			for (var i = 0, l = this.curves.length; i < l; i++) {
-				var curve = this.curves[i];
-				data.curves.push(curve.toJSON());
-			}
-
-			return data;
-		},
-		fromJSON: function fromJSON(json) {
-			Curve.prototype.fromJSON.call(this, json);
-			this.autoClose = json.autoClose;
-			this.curves = [];
-
-			for (var i = 0, l = json.curves.length; i < l; i++) {
-				var curve = json.curves[i];
-				this.curves.push(new Curves[curve.type]().fromJSON(curve));
-			}
-
-			return this;
-		}
-	});
-
-	function Path(points) {
-		CurvePath.call(this);
-		this.type = 'Path';
-		this.currentPoint = new Vector2();
-
-		if (points) {
-			this.setFromPoints(points);
-		}
-	}
-
-	Path.prototype = Object.assign(Object.create(CurvePath.prototype), {
-		constructor: Path,
-		setFromPoints: function setFromPoints(points) {
-			this.moveTo(points[0].x, points[0].y);
-
-			for (var i = 1, l = points.length; i < l; i++) {
-				this.lineTo(points[i].x, points[i].y);
-			}
-
-			return this;
-		},
-		moveTo: function moveTo(x, y) {
-			this.currentPoint.set(x, y); // TODO consider referencing vectors instead of copying?
-
-			return this;
-		},
-		lineTo: function lineTo(x, y) {
-			var curve = new LineCurve(this.currentPoint.clone(), new Vector2(x, y));
-			this.curves.push(curve);
-			this.currentPoint.set(x, y);
-			return this;
-		},
-		quadraticCurveTo: function quadraticCurveTo(aCPx, aCPy, aX, aY) {
-			var curve = new QuadraticBezierCurve(this.currentPoint.clone(), new Vector2(aCPx, aCPy), new Vector2(aX, aY));
-			this.curves.push(curve);
-			this.currentPoint.set(aX, aY);
-			return this;
-		},
-		bezierCurveTo: function bezierCurveTo(aCP1x, aCP1y, aCP2x, aCP2y, aX, aY) {
-			var curve = new CubicBezierCurve(this.currentPoint.clone(), new Vector2(aCP1x, aCP1y), new Vector2(aCP2x, aCP2y), new Vector2(aX, aY));
-			this.curves.push(curve);
-			this.currentPoint.set(aX, aY);
-			return this;
-		},
-		splineThru: function splineThru(pts
-		/*Array of Vector*/
-		) {
-			var npts = [this.currentPoint.clone()].concat(pts);
-			var curve = new SplineCurve(npts);
-			this.curves.push(curve);
-			this.currentPoint.copy(pts[pts.length - 1]);
-			return this;
-		},
-		arc: function arc(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
-			var x0 = this.currentPoint.x;
-			var y0 = this.currentPoint.y;
-			this.absarc(aX + x0, aY + y0, aRadius, aStartAngle, aEndAngle, aClockwise);
-			return this;
-		},
-		absarc: function absarc(aX, aY, aRadius, aStartAngle, aEndAngle, aClockwise) {
-			this.absellipse(aX, aY, aRadius, aRadius, aStartAngle, aEndAngle, aClockwise);
-			return this;
-		},
-		ellipse: function ellipse(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
-			var x0 = this.currentPoint.x;
-			var y0 = this.currentPoint.y;
-			this.absellipse(aX + x0, aY + y0, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation);
-			return this;
-		},
-		absellipse: function absellipse(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation) {
-			var curve = new EllipseCurve(aX, aY, xRadius, yRadius, aStartAngle, aEndAngle, aClockwise, aRotation);
-
-			if (this.curves.length > 0) {
-				// if a previous curve is present, attempt to join
-				var firstPoint = curve.getPoint(0);
-
-				if (!firstPoint.equals(this.currentPoint)) {
-					this.lineTo(firstPoint.x, firstPoint.y);
-				}
-			}
-
-			this.curves.push(curve);
-			var lastPoint = curve.getPoint(1);
-			this.currentPoint.copy(lastPoint);
-			return this;
-		},
-		copy: function copy(source) {
-			CurvePath.prototype.copy.call(this, source);
-			this.currentPoint.copy(source.currentPoint);
-			return this;
-		},
-		toJSON: function toJSON() {
-			var data = CurvePath.prototype.toJSON.call(this);
-			data.currentPoint = this.currentPoint.toArray();
-			return data;
-		},
-		fromJSON: function fromJSON(json) {
-			CurvePath.prototype.fromJSON.call(this, json);
-			this.currentPoint.fromArray(json.currentPoint);
-			return this;
-		}
-	});
-
-	function Shape(points) {
-		Path.call(this, points);
-		this.uuid = MathUtils.generateUUID();
-		this.type = 'Shape';
-		this.holes = [];
-	}
-
-	Shape.prototype = Object.assign(Object.create(Path.prototype), {
-		constructor: Shape,
-		getPointsHoles: function getPointsHoles(divisions) {
-			var holesPts = [];
-
-			for (var i = 0, l = this.holes.length; i < l; i++) {
-				holesPts[i] = this.holes[i].getPoints(divisions);
-			}
-
-			return holesPts;
-		},
-		// get points of shape and holes (keypoints based on segments parameter)
-		extractPoints: function extractPoints(divisions) {
-			return {
-				shape: this.getPoints(divisions),
-				holes: this.getPointsHoles(divisions)
-			};
-		},
-		copy: function copy(source) {
-			Path.prototype.copy.call(this, source);
-			this.holes = [];
-
-			for (var i = 0, l = source.holes.length; i < l; i++) {
-				var hole = source.holes[i];
-				this.holes.push(hole.clone());
-			}
-
-			return this;
-		},
-		toJSON: function toJSON() {
-			var data = Path.prototype.toJSON.call(this);
-			data.uuid = this.uuid;
-			data.holes = [];
-
-			for (var i = 0, l = this.holes.length; i < l; i++) {
-				var hole = this.holes[i];
-				data.holes.push(hole.toJSON());
-			}
-
-			return data;
-		},
-		fromJSON: function fromJSON(json) {
-			Path.prototype.fromJSON.call(this, json);
-			this.uuid = json.uuid;
-			this.holes = [];
-
-			for (var i = 0, l = json.holes.length; i < l; i++) {
-				var hole = json.holes[i];
-				this.holes.push(new Path().fromJSON(hole));
-			}
-
-			return this;
 		}
 	});
 
@@ -36995,6 +37074,7 @@
 	exports.FaceColors = FaceColors;
 	exports.FileLoader = FileLoader;
 	exports.FlatShading = FlatShading;
+	exports.Float16BufferAttribute = Float16BufferAttribute;
 	exports.Float32Attribute = Float32Attribute;
 	exports.Float32BufferAttribute = Float32BufferAttribute;
 	exports.Float64Attribute = Float64Attribute;
@@ -37344,3 +37424,4 @@
 	Object.defineProperty(exports, '__esModule', { value: true });
 
 })));
+//# sourceMappingURL=data:application/json;charset=utf-8;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidGhyZWUuanMiLCJzb3VyY2VzIjpbXSwic291cmNlc0NvbnRlbnQiOltdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiIn0=
