@@ -394,75 +394,78 @@ class Material extends EventDispatcher {
 
 		this.name = source.name;
 
-		this.fog = source.fog;
+		this.fog = typeof this.fog !== 'undefined' && source.fog;
 
-		this.blending = source.blending;
-		this.side = source.side;
-		this.vertexColors = source.vertexColors;
+		this.blending = typeof this.blending !== 'undefined' && source.blending;
+		this.side = typeof this.side !== 'undefined' && source.side;
+		this.vertexColors = typeof this.vertexColors !== 'undefined' && source.vertexColors;
 
-		this.opacity = source.opacity;
-		this.format = source.format;
-		this.transparent = source.transparent;
+		this.opacity = typeof this.opacity !== 'undefined' && source.opacity;
+		this.format = typeof this.format !== 'undefined' && source.format;
+		this.transparent = typeof this.transparent !== 'undefined' && source.transparent;
 
-		this.blendSrc = source.blendSrc;
-		this.blendDst = source.blendDst;
-		this.blendEquation = source.blendEquation;
-		this.blendSrcAlpha = source.blendSrcAlpha;
-		this.blendDstAlpha = source.blendDstAlpha;
-		this.blendEquationAlpha = source.blendEquationAlpha;
+		this.blendSrc = typeof this.blendSrc !== 'undefined' && source.blendSrc;
+		this.blendDst = typeof this.blendSrc !== 'undefined' && source.blendDst;
+		this.blendEquation = typeof this.blendEquation !== 'undefined' && source.blendEquation;
+		this.blendSrcAlpha = typeof this.blendSrcAlpha !== 'undefined' && source.blendSrcAlpha;
+		this.blendDstAlpha = typeof this.blendDstAlpha !== 'undefined' && source.blendDstAlpha;
+		this.blendEquationAlpha = typeof this.blendEquationAlpha !== 'undefined' && source.blendEquationAlpha;
 
-		this.depthFunc = source.depthFunc;
-		this.depthTest = source.depthTest;
-		this.depthWrite = source.depthWrite;
+		this.depthFunc = typeof this.depthFunc !== 'undefined' && source.depthFunc;
+		this.depthTest = typeof this.depthTest !== 'undefined' && source.depthTest;
+		this.depthWrite = typeof this.depthWrite !== 'undefined' && source.depthWrite;
 
-		this.stencilWriteMask = source.stencilWriteMask;
-		this.stencilFunc = source.stencilFunc;
-		this.stencilRef = source.stencilRef;
-		this.stencilFuncMask = source.stencilFuncMask;
-		this.stencilFail = source.stencilFail;
-		this.stencilZFail = source.stencilZFail;
-		this.stencilZPass = source.stencilZPass;
-		this.stencilWrite = source.stencilWrite;
+		this.stencilWriteMask = typeof this.stencilWriteMask !== 'undefined' && source.stencilWriteMask;
+		this.stencilFunc = typeof this.stencilFunc !== 'undefined' && source.stencilFunc;
+		this.stencilRef = typeof this.stencilRef !== 'undefined' && source.stencilRef;
+		this.stencilFuncMask = typeof this.stencilFuncMask !== 'undefined' && source.stencilFuncMask;
+		this.stencilFail = typeof this.stencilFail !== 'undefined' && source.stencilFail;
+		this.stencilZFail = typeof this.stencilZFail !== 'undefined' && source.stencilZFail;
+		this.stencilZPass = typeof this.stencilZPass !== 'undefined' && source.stencilZPass;
+		this.stencilWrite = typeof this.stencilWrite !== 'undefined' && source.stencilWrite;
 
-		const srcPlanes = source.clippingPlanes;
-		let dstPlanes = null;
+		if (typeof this.clippingPlanes !== 'undefined') {
+			const srcPlanes = source.clippingPlanes;
+			let dstPlanes = null;
 
-		if ( srcPlanes !== null ) {
+			if ( srcPlanes !== null ) {
 
-			const n = srcPlanes.length;
-			dstPlanes = new Array( n );
+				const n = srcPlanes.length;
+				dstPlanes = new Array( n );
 
-			for ( let i = 0; i !== n; ++ i ) {
+				for ( let i = 0; i !== n; ++ i ) {
 
-				dstPlanes[ i ] = srcPlanes[ i ].clone();
+					dstPlanes[ i ] = srcPlanes[ i ].clone();
+
+				}
 
 			}
 
+			this.clippingPlanes = dstPlanes;
 		}
 
-		this.clippingPlanes = dstPlanes;
-		this.clipIntersection = source.clipIntersection;
-		this.clipShadows = source.clipShadows;
+		this.clipIntersection = typeof this.clipIntersection !== 'undefined' && source.clipIntersection;
+		this.clipShadows = typeof this.clipShadows !== 'undefined' && source.clipShadows;
 
-		this.shadowSide = source.shadowSide;
+		this.shadowSide = typeof this.shadowSide !== 'undefined' && source.shadowSide;
 
-		this.colorWrite = source.colorWrite;
+		this.colorWrite = typeof this.colorWrite !== 'undefined' && source.colorWrite;
 
-		this.precision = source.precision;
+		this.precision = typeof this.precision !== 'undefined' && source.precision;
 
-		this.polygonOffset = source.polygonOffset;
-		this.polygonOffsetFactor = source.polygonOffsetFactor;
-		this.polygonOffsetUnits = source.polygonOffsetUnits;
+		this.polygonOffset = typeof this.polygonOffset !== 'undefined' && source.polygonOffset;
+		this.polygonOffsetFactor = typeof this.polygonOffsetFactor !== 'undefined' && source.polygonOffsetFactor;
+		this.polygonOffsetUnits = typeof this.polygonOffsetUnits !== 'undefined' && source.polygonOffsetUnits;
 
-		this.dithering = source.dithering;
+		this.dithering = typeof this.dithering !== 'undefined' && source.dithering;
 
-		this.alphaTest = source.alphaTest;
-		this.alphaToCoverage = source.alphaToCoverage;
-		this.premultipliedAlpha = source.premultipliedAlpha;
+		this.alphaTest = typeof this.alphaTest !== 'undefined' && source.alphaTest;
+		this.alphaToCoverage = typeof this.alphaToCoverage !== 'undefined' && source.alphaToCoverage;
+		this.premultipliedAlpha = typeof this.premultipliedAlpha !== 'undefined' && source.premultipliedAlpha;
 
-		this.visible = source.visible;
+		this.visible = typeof this.visible !== 'undefined' && source.visible;
 
-		this.toneMapped = source.toneMapped;
+		this.toneMapped = typeof this.toneMapped !== 'undefined' && source.toneMapped;
 
 		this.userData = JSON.parse( JSON.stringify( source.userData ) );
 
