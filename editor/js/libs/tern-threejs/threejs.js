@@ -391,7 +391,7 @@
         },
         "vertices": {
           "!type": "[]",
-          "!doc": "Array of [page:Vector3 vertices].<br>\n\t\tThe array of vertices holds every position of points in the model.<br>\n\t\tTo signal an update in this array, [page:Geometry Geometry.verticesNeedUpdate] needs to be set to true."
+          "!doc": "Array of [page:Vector3 vertices].<br>\n\t\tThe array of vertices holds every position of points in the model."
         },
         "colors": {
           "!type": "[]",
@@ -432,10 +432,6 @@
         "dynamic": {
           "!type": "bool",
           "!doc": "Set to *true* if attribute buffers will need to change in runtime (using \"dirty\" flags).<br>\n\t\tUnless set to true internal typed arrays corresponding to buffers will be deleted once sent to GPU.<br>\n\t\tDefaults to true."
-        },
-        "verticesNeedUpdate": {
-          "!type": "bool",
-          "!doc": "Set to *true* if the vertices array has been updated."
         },
         "elementsNeedUpdate": {
           "!type": "bool",

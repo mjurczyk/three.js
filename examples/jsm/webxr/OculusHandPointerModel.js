@@ -126,7 +126,6 @@ class OculusHandPointerModel extends THREE.Object3D {
 			'position',
 			new THREE.Float32BufferAttribute( vertices, 3 )
 		);
-		// verticesNeedUpdate = true;
 
 	}
 
